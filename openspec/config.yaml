@@ -1,0 +1,35 @@
+schema: spec-driven
+
+# Project context
+context: |
+  Proyecto: Agente CLI en terminal (estilo Claude Code) con arquitectura de Harness Multi-API.
+  Fórmula arquitectónica: Harness = Modelo (Adaptador Multi-API) + Reglas (System Prompt y Guardrails) + Contexto (Árbol de carpetas y AGENT.md) + Herramientas (6 tools con JSON Schema).
+  Separación modular estricta en 4 módulos bajo `harness/`:
+    - `llm_provider.py`: Único punto de conexión con APIs externas.
+    - `agent_loop.py`: Ciclo de ejecución while con MAX_STEPS=15.
+    - `tools.py`: 6 herramientas con salidas truncadas a 4000 caracteres.
+    - `guardrails.py`: Bloqueo de archivos .env, validación de rutas dentro del cwd y confirmación [s/n] interactiva antes de editar archivos o correr comandos.
+  Todos los artefactos, especificaciones y documentación deben redactarse en español.
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Mantener las propuestas breves, concisas y directas al grano (máximo 300 palabras).
+    - Explicar claramente el objetivo y detallar explícitamente qué queda fuera de alcance.
+  specs:
+    - Definir todos los requerimientos y especificaciones obligatoriamente mediante escenarios estructurados en formato Given/When/Then (Dado/Cuando/Entonces).
+    - Cubrir casos de éxito, validaciones y manejo de errores con escenarios claros.
+  tasks:
+    - Dividir el trabajo en pasos pequeños, atómicos y fácilmente verificables de manera secuencial.
+    - Cada tarea debe poder ejecutarse y probarse de forma aislada antes de marcarla como completada [x].
+    - Nunca escribir código de la aplicación sin una tarea activa en tasks.md.
+
+# Per-operation guidance
+operations:
+  apply:
+    guidance:
+      - Implementar y probar una única tarea a la vez antes de pasar a la siguiente.
+      - Verificar cada tarea ejecutando pruebas antes de marcar [x].
+  archive:
+    guidance:
+      - Resumir brevemente los resultados y módulos implementados antes de archivar.

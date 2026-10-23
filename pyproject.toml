@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harness-jarvis"
+version = "0.1.0"
+description = "Agente CLI en terminal con arquitectura de Harness Multi-API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+jarvis = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+packages = ["harness"]
