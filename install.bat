@@ -9,6 +9,12 @@ echo.
 :: 1. Verificar si Python esta instalado y en el PATH
 where python >nul 2>nul
 if %errorlevel% neq 0 (
+    if exist "%LOCALAPPDATA%\Python\bin\python.exe" set "PATH=%LOCALAPPDATA%\Python\bin;!PATH!"
+    if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe" set "PATH=%LOCALAPPDATA%\Microsoft\WindowsApps;!PATH!"
+)
+
+where python >nul 2>nul
+if %errorlevel% neq 0 (
     echo [ERROR] No se encontro Python en el PATH del sistema.
     echo Por favor instala Python 3.10 o superior desde https://www.python.org/
     echo Asegurate de marcar la casilla "Add python.exe to PATH" durante la instalacion.

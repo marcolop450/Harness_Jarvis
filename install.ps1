@@ -16,6 +16,14 @@ Write-Host ""
 # 1. Verificar si Python esta instalado
 $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
 if (-not $pythonCmd) {
+    if (Test-Path "$env:LOCALAPPDATA\Python\bin\python.exe") {
+        $env:PATH = "$env:LOCALAPPDATA\Python\bin;" + $env:PATH
+    } elseif (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\python.exe") {
+        $env:PATH = "$env:LOCALAPPDATA\Microsoft\WindowsApps;" + $env:PATH
+    }
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+}
+if (-not $pythonCmd) {
     Write-Host "[ERROR] No se encontro Python en el PATH del sistema." -ForegroundColor Red
     Write-Host "Por favor instala Python 3.10 o superior desde https://www.python.org/" -ForegroundColor Yellow
     Write-Host "Asegurate de marcar la casilla 'Add python.exe to PATH' durante la instalacion." -ForegroundColor Yellow
