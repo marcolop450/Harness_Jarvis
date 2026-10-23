@@ -89,16 +89,40 @@ def validate_safe_path(path_str: str, base_dir: Path | None = None) -> Path:
     return resolved
 
 
+_turn_approved_targets: set[str] = set()
+
+
+def clear_turn_approvals() -> None:
+    """Limpia la memoria de autorizaciones en lote registradas durante el turno activo."""
+    _turn_approved_targets.clear()
+
+
 def confirm_action(
     action_description: str,
     details: str = "",
     input_fn: Callable[[str], str] | None = None,
+    target: str | None = None,
 ) -> bool:
-    """Solicita confirmación interactiva obligatoria [s/n] al usuario.
+    """Solicita confirmación interactiva [s/n/a] al usuario.
 
-    Retorna True si el usuario acepta ('s', 'si', 'sí', 'ss', 'y', 'yes', etc.).
-    Retorna False si el usuario rechaza.
+    Soporta:
+    - 's' / 'si' / 'y': autoriza la operación actual.
+    - 'n' / 'no': rechaza la operación.
+    - 'a' / 'all': autoriza la operación actual y recuerda la aprobación para el
+      mismo objetivo durante el resto del turno activo.
     """
+    resolved_target = target
+    if not resolved_target and details:
+        if details.startswith("Ruta: "):
+            resolved_target = details[6:].strip()
+        elif details.startswith("Comando: "):
+            resolved_target = details[9:].strip()
+        else:
+            resolved_target = details.strip()
+
+    if resolved_target and resolved_target in _turn_approved_targets:
+        return True
+
     prompter = input_fn or input
 
     # Volcado explícito e inmediato en pantalla previo a la espera de entrada
@@ -111,12 +135,18 @@ def confirm_action(
     sys.stdout.flush()
 
     try:
-        answer = prompter("¿Desea autorizar esta operacion? [s/n]: ").strip().lower()
+        prompt_text = "¿Desea autorizar esta operacion? [s/n/a (autorizar todo para este objetivo)]: "
+        answer = prompter(prompt_text).strip().lower()
     except (KeyboardInterrupt, EOFError):
         return False
 
     if not answer:
         return False
+
+    if answer in ("a", "all", "auto", "aa"):
+        if resolved_target:
+            _turn_approved_targets.add(resolved_target)
+        return True
 
     valid_affirmatives = (
         "s", "si", "sí", "ss", "sii", "y", "yes", "ye", "ok", "true", "1"

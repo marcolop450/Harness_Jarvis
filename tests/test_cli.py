@@ -179,6 +179,114 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(ret, 0)
         self.assertIn("¡Hasta luego!", buf.getvalue())
 
+    def test_handle_slash_command_sessions_and_resume(self):
+        import tempfile
+        from harness.model_config import list_saved_sessions, load_session_by_id, save_session_record
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # Caso 1: /sessions vacío
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                p, m, handled = handle_slash_command("/sessions", "groq", "llama-3.3", tmp_path)
+            self.assertTrue(handled)
+            self.assertIn("No hay sesiones anteriores registradas", buf.getvalue())
+
+            # Guardar dos sesiones de prueba
+            save_session_record(
+                "session_alpha",
+                "gemini",
+                "gemini-2.5-flash",
+                [{"role": "user", "content": "hola 1"}, {"role": "assistant", "content": "res 1"}],
+                base_dir=tmp_path,
+            )
+            save_session_record(
+                "session_beta",
+                "groq",
+                "llama-3.3",
+                [{"role": "user", "content": "hola 2"}],
+                base_dir=tmp_path,
+            )
+
+            # Caso 2: /sessions con registros
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                p, m, handled = handle_slash_command("/sessions", "groq", "llama-3.3", tmp_path)
+            self.assertTrue(handled)
+            out = buf.getvalue()
+            self.assertIn("session_alpha", out)
+            self.assertIn("session_beta", out)
+            self.assertIn("HISTORIAL DE SESIONES", out)
+
+            # Caso 3: /resume sin argumentos
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                p, m, handled = handle_slash_command("/resume", "groq", "llama-3.3", tmp_path)
+            self.assertTrue(handled)
+            self.assertIn("[Uso]: /resume <id_de_sesion>", buf.getvalue())
+
+            # Caso 4: /resume con id inexistente
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                p, m, handled = handle_slash_command("/resume non_existent", "groq", "llama-3.3", tmp_path)
+            self.assertTrue(handled)
+            self.assertIn("No se encontró la sesión", buf.getvalue())
+
+            # Caso 5: /resume exitoso restaurando historial y modelo
+            history = []
+            state = {"id": "initial_session"}
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                new_p, new_m, handled = handle_slash_command(
+                    "/resume session_alpha",
+                    "groq",
+                    "llama-3.3",
+                    tmp_path,
+                    conversation_history=history,
+                    session_state=state,
+                )
+            self.assertTrue(handled)
+            self.assertEqual(new_p, "gemini")
+            self.assertEqual(new_m, "gemini-2.5-flash")
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0]["content"], "hola 1")
+            self.assertEqual(state["id"], "session_alpha")
+            self.assertIn("reanudada con éxito", buf.getvalue())
+
+    def test_handle_slash_command_compact(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # Caso 1: historial vacío o menor a 2 mensajes
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                p, m, handled = handle_slash_command(
+                    "/compact", "groq", "llama-3.3", tmp_path, conversation_history=[]
+                )
+            self.assertTrue(handled)
+            self.assertIn("demasiado breve", buf.getvalue())
+
+            # Caso 2: historial suficiente
+            history = [
+                {"role": "user", "content": "tarea 1"},
+                {"role": "assistant", "content": "completada 1"},
+                {"role": "user", "content": "tarea 2"},
+            ]
+            buf = io.StringIO()
+            with patch(
+                "main.compact_conversation_history",
+                return_value=([{"role": "system", "content": "resumen"}], "resumen"),
+            ):
+                with patch("sys.stdout", buf):
+                    p, m, handled = handle_slash_command(
+                        "/compact", "groq", "llama-3.3", tmp_path, conversation_history=history
+                    )
+            self.assertTrue(handled)
+            self.assertIn("Historial compactado exitosamente", buf.getvalue())
+            self.assertEqual(len(history), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

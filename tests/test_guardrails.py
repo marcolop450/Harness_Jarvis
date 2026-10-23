@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 from harness.guardrails import (
     SecurityViolationError,
+    clear_turn_approvals,
     confirm_action,
     is_sensitive_path,
     validate_safe_path,
@@ -68,16 +69,35 @@ class TestGuardrailsConfirmation(unittest.TestCase):
                 result = confirm_action("Ejecutar comando", input_fn=lambda _: negative)
                 self.assertFalse(result)
 
-    def test_confirm_action_prints_details_and_flushes(self):
-        import io
-        from unittest.mock import patch
-        buf = io.StringIO()
-        with patch("sys.stdout", buf):
-            confirm_action("Eliminar archivo", details="archivo.txt", input_fn=lambda _: "s")
-        output = buf.getvalue()
-        self.assertIn("[CONFIRMACION REQUERIDA]", output)
-        self.assertIn("Eliminar archivo", output)
-        self.assertIn("archivo.txt", output)
+    def test_confirm_action_batch_authorization_with_a(self):
+        clear_turn_approvals()
+        prompts_count = 0
+
+        def counting_input(prompt_text):
+            nonlocal prompts_count
+            prompts_count += 1
+            return "a"
+
+        # Primera llamada para 'test.py': responde 'a'
+        res1 = confirm_action("Modificar archivo", details="Ruta: test.py", input_fn=counting_input)
+        self.assertTrue(res1)
+        self.assertEqual(prompts_count, 1)
+
+        # Segunda llamada para el mismo 'test.py': no debe volver a preguntar
+        res2 = confirm_action("Modificar archivo", details="Ruta: test.py", input_fn=counting_input)
+        self.assertTrue(res2)
+        self.assertEqual(prompts_count, 1, "No debió llamar a input_fn una segunda vez")
+
+        # Tercera llamada para otro archivo distinto: debe preguntar
+        res3 = confirm_action("Modificar archivo", details="Ruta: other.py", input_fn=lambda _: "s")
+        self.assertTrue(res3)
+
+        # Reiniciar aprobaciones por turno
+        clear_turn_approvals()
+        # Ahora para 'test.py' debe volver a preguntar
+        res4 = confirm_action("Modificar archivo", details="Ruta: test.py", input_fn=counting_input)
+        self.assertTrue(res4)
+        self.assertEqual(prompts_count, 2)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from harness.llm_provider import (
     NormalizedResponse,
     NormalizedToolCall,
     call_llm,
+    format_clean_api_error,
     normalize_arguments,
     resolve_provider,
     SUPPORTED_PROVIDERS,
@@ -122,6 +123,64 @@ class TestCallLLM(unittest.TestCase):
             self.assertEqual(resp.tool_calls[0].name, "read_file")
             self.assertEqual(resp.tool_calls[0].arguments, {"path": "harness/llm_provider.py"})
             self.assertEqual(resp.finish_reason, "tool_calls")
+
+
+class TestCleanApiErrorsAndTokens(unittest.TestCase):
+    def test_format_clean_api_error_429(self):
+        err = Exception("Error code: 429 - {'error': {'message': 'Rate limit reached'}}")
+        msg = format_clean_api_error(err)
+        self.assertIn("Error 429", msg)
+        self.assertIn("Límite de tokens/cuota", msg)
+        self.assertNotIn("{'error'", msg)
+
+    def test_format_clean_api_error_401(self):
+        err = Exception("Error code: 401 - {'error': {'message': 'Invalid API Key'}}")
+        msg = format_clean_api_error(err)
+        self.assertIn("Error 401", msg)
+        self.assertIn("Clave de API inválida", msg)
+        self.assertNotIn("{'error'", msg)
+
+    def test_format_clean_api_error_404(self):
+        err = Exception("Error code: 404 - {'error': {'message': 'The model does not exist'}}")
+        msg = format_clean_api_error(err)
+        self.assertIn("Error 404", msg)
+        self.assertIn("Modelo no encontrado", msg)
+
+    def test_format_clean_api_error_500(self):
+        err = Exception("Error code: 500 - Internal Server Error")
+        msg = format_clean_api_error(err)
+        self.assertIn("Error 50", msg)
+        self.assertIn("fuera de línea", msg)
+
+    def test_call_llm_catches_api_error_and_raises_clean_message(self):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = Exception("Error code: 429 - Rate limit exceeded")
+
+        with patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test"}, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                call_llm(
+                    messages=[{"role": "user", "content": "Hola"}],
+                    provider_name="groq",
+                    client=mock_client,
+                )
+            self.assertIn("Error 429", str(ctx.exception))
+            self.assertIn("Límite de tokens/cuota", str(ctx.exception))
+
+    def test_call_llm_passes_max_tokens(self):
+        mock_client = MagicMock()
+        mock_msg = SimpleNamespace(content="Respuesta", tool_calls=None)
+        mock_choice = SimpleNamespace(message=mock_msg, finish_reason="stop")
+        mock_client.chat.completions.create.return_value = SimpleNamespace(choices=[mock_choice])
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            call_llm(
+                messages=[{"role": "user", "content": "Hola"}],
+                provider_name="openai",
+                client=mock_client,
+                max_tokens=1500,
+            )
+            _, kwargs = mock_client.chat.completions.create.call_args
+            self.assertEqual(kwargs.get("max_tokens"), 1500)
 
 
 if __name__ == "__main__":

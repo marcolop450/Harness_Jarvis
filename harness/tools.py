@@ -15,7 +15,10 @@ from __future__ import annotations
 import enum
 import os
 import re
+import sqlite3
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 from harness.guardrails import SecurityViolationError, confirm_action, validate_safe_path
@@ -36,6 +39,9 @@ TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "write_file": RiskLevel.CONFIRM,
     "edit_file": RiskLevel.CONFIRM,
     "run_command": RiskLevel.CONFIRM,
+    "mcp_fetch": RiskLevel.AUTO,
+    "mcp_git_info": RiskLevel.AUTO,
+    "mcp_sqlite_query": RiskLevel.AUTO,
 }
 
 
@@ -270,6 +276,113 @@ def tool_search_code(
     return truncate_output("\n".join(matches))
 
 
+def tool_mcp_fetch(url: str, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> str:
+    """Consulta segura de endpoints HTTP o recursos web bajo el protocolo MCP."""
+    if not url.startswith(("http://", "https://")):
+        return "Error: Solo se admiten URLs que inicien con http:// o https://."
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Harness-Jarvis-MCP/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            status = response.status
+            content_type = response.headers.get_content_type()
+            raw_bytes = response.read(max_chars * 2)
+            charset = response.headers.get_content_charset() or "utf-8"
+            body = raw_bytes.decode(charset, errors="replace")
+            res_str = f"[MCP Fetch Status {status} | Tipo: {content_type}]\n\n{body}"
+            return truncate_output(res_str, max_chars)
+    except urllib.error.HTTPError as http_err:
+        return f"[MCP Fetch Error {http_err.code}]: {http_err.reason}"
+    except Exception as exc:
+        return f"[MCP Fetch Error]: {exc}"
+
+
+def tool_mcp_git_info(
+    subcommand: str = "status",
+    max_commits: int = 5,
+    base_dir: Path | None = None,
+) -> str:
+    """Inspector MCP para consultar el estado del repositorio Git del proyecto."""
+    cwd = (base_dir or Path.cwd()).resolve()
+    valid_subcommands = {
+        "status": ["git", "status", "-s"],
+        "log": ["git", "log", f"-n{max(1, min(max_commits, 20))}", "--oneline"],
+        "diff": ["git", "diff", "--stat"],
+        "branch": ["git", "branch", "--show-current"],
+    }
+    cmd_key = subcommand.strip().lower()
+    if cmd_key not in valid_subcommands:
+        return (
+            f"Error: Subcomando '{subcommand}' no soportado. "
+            f"Opciones disponibles: {', '.join(valid_subcommands.keys())}."
+        )
+
+    try:
+        res = subprocess.run(
+            valid_subcommands[cmd_key],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if res.returncode != 0:
+            err_msg = res.stderr.strip() or f"Código de salida: {res.returncode}"
+            return f"[MCP Git Error]: {err_msg}"
+        out = res.stdout.strip()
+        if not out:
+            return f"[MCP Git {cmd_key}]: Sin cambios / salida limpia."
+        return truncate_output(f"[MCP Git {cmd_key}]:\n{out}")
+    except Exception as exc:
+        return f"[MCP Git Error]: {exc}"
+
+
+def tool_mcp_sqlite_query(
+    query: str,
+    db_path: str = ":memory:",
+    base_dir: Path | None = None,
+) -> str:
+    """Ejecutor MCP de consultas SQL sobre bases de datos SQLite locales o en memoria."""
+    clean_query = query.strip()
+    if not clean_query:
+        return "Error: La consulta SQL no puede estar vacía."
+
+    if db_path != ":memory:":
+        safe_path = validate_safe_path(db_path, base_dir)
+        db_target = str(safe_path)
+    else:
+        db_target = ":memory:"
+
+    try:
+        conn = sqlite3.connect(db_target)
+        try:
+            cursor = conn.cursor()
+            if clean_query.lower().startswith("select") or clean_query.lower().startswith("pragma"):
+                cursor.execute(clean_query)
+                rows = cursor.fetchall()
+                col_names = [d[0] for d in cursor.description] if cursor.description else []
+                header = " | ".join(col_names)
+                lines = [header, "-" * max(len(header), 10)]
+                for row in rows[:50]:
+                    lines.append(" | ".join(str(v) for v in row))
+                if len(rows) > 50:
+                    lines.append(f"... {len(rows) - 50} filas adicionales omitidas.")
+                output = "\n".join(lines) if rows else "Consulta ejecutada: 0 filas encontradas."
+            else:
+                cursor.executescript(clean_query)
+                conn.commit()
+                output = "Sentencia ejecutada con éxito."
+        finally:
+            conn.close()
+        return truncate_output(output)
+    except SecurityViolationError as sec_err:
+        return f"Violación de seguridad: {sec_err}"
+    except Exception as exc:
+        return f"[MCP SQLite Error]: {exc}"
+
+
 def execute_tool(
     name: str,
     arguments: dict[str, Any],
@@ -323,6 +436,22 @@ def execute_tool(
             return tool_search_code(
                 pattern=args.get("pattern", ""),
                 path=args.get("path", "."),
+                base_dir=base_dir,
+            )
+        elif name == "mcp_fetch":
+            return tool_mcp_fetch(
+                url=args.get("url", ""),
+            )
+        elif name == "mcp_git_info":
+            return tool_mcp_git_info(
+                subcommand=args.get("subcommand", "status"),
+                max_commits=int(args.get("max_commits", 5)),
+                base_dir=base_dir,
+            )
+        elif name == "mcp_sqlite_query":
+            return tool_mcp_sqlite_query(
+                query=args.get("query", ""),
+                db_path=args.get("db_path", ":memory:"),
                 base_dir=base_dir,
             )
         else:
@@ -461,6 +590,66 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mcp_fetch",
+            "description": "Cliente MCP para consultar recursos web o APIs externas mediante peticiones HTTP seguras.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL completa (http:// o https://) a consultar.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mcp_git_info",
+            "description": "Herramienta MCP para inspeccionar el estado, ramas, historial de commits o diffs del repositorio Git.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subcommand": {
+                        "type": "string",
+                        "description": "Subcomando a ejecutar: 'status', 'log', 'diff' o 'branch'.",
+                        "enum": ["status", "log", "diff", "branch"],
+                    },
+                    "max_commits": {
+                        "type": "integer",
+                        "description": "Número máximo de commits a mostrar al consultar 'log' (por defecto 5).",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mcp_sqlite_query",
+            "description": "Herramienta MCP para ejecutar consultas SQL sobre bases de datos locales SQLite o base en memoria.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Sentencia SQL a ejecutar.",
+                    },
+                    "db_path": {
+                        "type": "string",
+                        "description": "Ruta al archivo .db / .sqlite o ':memory:' (por defecto ':memory:').",
+                    },
+                },
+                "required": ["query"],
             },
         },
     },

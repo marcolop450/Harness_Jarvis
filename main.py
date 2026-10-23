@@ -12,24 +12,29 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from dotenv import load_dotenv
 
-from harness.agent_loop import MAX_STEPS, run_agent_loop
-from harness.llm_provider import SUPPORTED_PROVIDERS, resolve_provider
+from harness.agent_loop import MAX_STEPS, compact_conversation_history, run_agent_loop
+from harness.guardrails import clear_turn_approvals
+from harness.llm_provider import SUPPORTED_PROVIDERS, format_clean_api_error, resolve_provider
 from harness.model_config import (
     add_user_model,
     build_workspace_system_prompt,
     clear_session_history,
     get_available_models_catalog,
+    list_saved_sessions,
     load_model_memory,
+    load_session_by_id,
     load_session_history,
     remove_user_model,
     resolve_model_selection,
     save_api_key_to_env,
     save_model_selection,
     save_session_history,
+    save_session_record,
 )
 
 DEFAULT_BASE_PROMPT: str = (
@@ -135,7 +140,7 @@ def print_banner(
   Modelo    : {model_str}
   Estado API: {status_str}
   Limite    : MAX_STEPS={MAX_STEPS} por consulta
-  Comandos  : /model  |  /key <prov> <clave>  |  /guide  |  /clear  |  /reset  |  exit
+  Comandos  : /model | /key | /compact | /sessions | /resume | /guide | /clear | /reset | exit
 ==============================================================
 """
     print(banner.strip())
@@ -180,8 +185,9 @@ def handle_slash_command(
     current_model: str | None,
     cwd: Path,
     conversation_history: list[dict[str, Any]] | None = None,
+    session_state: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None, bool]:
-    """Procesa comandos de barra oblicua (/model, /key, /cwd, /clear, /reset).
+    """Procesa comandos de barra oblicua (/model, /key, /cwd, /clear, /reset, /sessions, /resume).
 
     Retorna (nuevo_proveedor, nuevo_modelo, handled).
     """
@@ -210,6 +216,94 @@ def handle_slash_command(
         clear_session_history(cwd)
         print("\n+--------------------------------------------------------+")
         print("| [+] Memoria de conversación reiniciada para la carpeta |")
+        print("+--------------------------------------------------------+")
+        return current_provider, current_model, True
+
+    if cmd in ("/compact", "/compactar"):
+        if conversation_history is None or len([m for m in conversation_history if m.get("role") != "system"]) < 2:
+            print("\n[Compactar]: El historial es demasiado breve (menos de 2 mensajes) para requerir compactación.")
+            return current_provider, current_model, True
+
+        if not current_provider or not current_model:
+            print("\n[Error]: Debes tener un modelo configurado para compactar el historial.")
+            return current_provider, current_model, True
+
+        print("\n[*] Compactando historial de conversación con el LLM activo...", flush=True)
+        old_char_count = sum(len(str(m.get("content", ""))) for m in conversation_history)
+        new_history, summary = compact_conversation_history(
+            conversation_history,
+            provider_name=current_provider,
+            model=current_model,
+        )
+        conversation_history.clear()
+        conversation_history.extend(new_history)
+        save_session_history(conversation_history, base_dir=cwd)
+        new_char_count = sum(len(str(m.get("content", ""))) for m in conversation_history)
+        reduction = max(0, int((1 - (new_char_count / max(old_char_count, 1))) * 100))
+
+        print("\n+--------------------------------------------------------+")
+        print("| [+] Historial compactado exitosamente!                 |")
+        print(f"|     Caracteres previos : {old_char_count}".ljust(57) + "|")
+        print(f"|     Caracteres actuales: {new_char_count}".ljust(57) + "|")
+        print(f"|     Reducción estimada : ~{reduction}% de tokens".ljust(57) + "|")
+        print("+--------------------------------------------------------+")
+        print(f"\n[Resumen conservado en contexto]:\n{summary}")
+        return current_provider, current_model, True
+
+    if cmd in ("/sessions", "/sesiones"):
+        sessions = list_saved_sessions(cwd)
+        if not sessions:
+            print("\n[Sesiones]: No hay sesiones anteriores registradas en este espacio de trabajo.")
+        else:
+            print("\n+----------------------------------------------------------------------------------+")
+            print("| HISTORIAL DE SESIONES GUARDADAS EN ESTE ESPACIO                                  |")
+            print("+----------------------------------------------------------------------------------+")
+            print("| ID de Sesion                  | Fecha y Hora        | Modelo             | Msgs  |")
+            print("+-------------------------------+---------------------+--------------------+-------+")
+            for s in sessions:
+                sid = (s["session_id"][:29]).ljust(29)
+                dt = (s.get("created_at") or "")[:19].ljust(19)
+                m_info = f"{s.get('provider') or '?'}:{s.get('model') or '?'}"[:18].ljust(18)
+                cnt = str(s.get("message_count", 0)).rjust(5)
+                print(f"| {sid} | {dt} | {m_info} | {cnt} |")
+            print("+----------------------------------------------------------------------------------+")
+            print("| Usa: /resume <id_de_sesion> para continuar cualquiera de estas sesiones.          |")
+            print("+----------------------------------------------------------------------------------+")
+        return current_provider, current_model, True
+
+    if cmd in ("/resume", "/reanudar"):
+        if len(parts) < 2:
+            print("\n[Uso]: /resume <id_de_sesion>")
+            print("  Ejemplo: /resume session_20261022_223015")
+            print("  Consulta las sesiones disponibles con: /sessions")
+            return current_provider, current_model, True
+
+        target_id = parts[1]
+        session_data = load_session_by_id(target_id, cwd)
+        if not session_data:
+            print(f"\n[Error]: No se encontró la sesión '{target_id}'. Consulta las disponibles con /sessions.")
+            return current_provider, current_model, True
+
+        restored_msgs = session_data.get("messages", [])
+        if conversation_history is not None:
+            conversation_history.clear()
+            conversation_history.extend(restored_msgs)
+        save_session_history(restored_msgs, base_dir=cwd)
+
+        if session_state is not None:
+            session_state["id"] = session_data.get("session_id", target_id)
+
+        restored_prov = session_data.get("provider")
+        restored_mod = session_data.get("model")
+        if restored_prov and restored_mod:
+            current_provider = restored_prov
+            current_model = restored_mod
+
+        print("\n+--------------------------------------------------------+")
+        print(f"| [+] Sesión '{target_id}' reanudada con éxito!           |")
+        print(f"|     Mensajes cargados : {len(restored_msgs)}".ljust(57) + "|")
+        if current_provider and current_model:
+            print(f"|     Modelo restaurado : {current_provider.upper()} ({current_model})".ljust(57) + "|")
         print("+--------------------------------------------------------+")
         return current_provider, current_model, True
 
@@ -388,6 +482,10 @@ def run_repl(
     if conversation_history:
         print(f"[*] Historial de sesión cargado ({len(conversation_history)} mensajes previos en esta carpeta).")
 
+    session_state: dict[str, Any] = {
+        "id": f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    }
+
     def on_step(current: int, total: int) -> None:
         if current > 1:
             print(f"  [*] [Paso {current}/{total}] Razonando...", flush=True)
@@ -416,7 +514,12 @@ def run_repl(
         # Manejo de comandos slash
         if user_input.startswith("/"):
             active_provider, active_model, handled = handle_slash_command(
-                user_input, active_provider, active_model, working_dir, conversation_history
+                user_input,
+                active_provider,
+                active_model,
+                working_dir,
+                conversation_history,
+                session_state=session_state,
             )
             if handled:
                 continue
@@ -443,6 +546,7 @@ def run_repl(
 
         # Enriquecer system prompt con el espacio de trabajo
         full_system_prompt = build_workspace_system_prompt(system_prompt, base_dir=working_dir)
+        clear_turn_approvals()
 
         try:
             reply, conversation_history = run_agent_loop(
@@ -455,9 +559,19 @@ def run_repl(
                 on_step=on_step,
             )
             save_session_history(conversation_history, base_dir=working_dir)
+            save_session_record(
+                session_state["id"],
+                active_provider,
+                active_model,
+                conversation_history,
+                base_dir=working_dir,
+            )
             print(f"\n{reply}")
         except Exception as exc:
-            print(f"\n[Error durante el turno]: {exc}", file=sys.stderr)
+            err_msg = str(exc)
+            if not err_msg.startswith("[Error"):
+                err_msg = format_clean_api_error(exc)
+            print(f"\n{err_msg}", file=sys.stderr)
 
     return 0
 

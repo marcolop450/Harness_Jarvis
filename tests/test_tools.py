@@ -8,6 +8,9 @@ from harness.tools import (
     get_tools_definitions,
     tool_edit_file,
     tool_list_dir,
+    tool_mcp_fetch,
+    tool_mcp_git_info,
+    tool_mcp_sqlite_query,
     tool_read_file,
     tool_run_command,
     tool_search_code,
@@ -17,9 +20,9 @@ from harness.tools import (
 
 
 class TestToolsDefinitions(unittest.TestCase):
-    def test_exactly_six_tools_defined(self):
+    def test_tools_catalog_includes_core_and_mcp(self):
         tools = get_tools_definitions()
-        self.assertEqual(len(tools), 6)
+        self.assertEqual(len(tools), 9)
         names = {t["function"]["name"] for t in tools}
         expected = {
             "read_file",
@@ -28,6 +31,9 @@ class TestToolsDefinitions(unittest.TestCase):
             "list_dir",
             "run_command",
             "search_code",
+            "mcp_fetch",
+            "mcp_git_info",
+            "mcp_sqlite_query",
         }
         self.assertEqual(names, expected)
 
@@ -194,6 +200,84 @@ class TestExecuteToolDispatcher(unittest.TestCase):
         res = execute_tool("read_file", {"path": ".env"}, base_dir=self.base)
         self.assertIn("Violación de seguridad", res)
         self.assertIn("confidencial", res)
+
+
+class TestMCPTools(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp_dir.name).resolve()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_mcp_fetch_validates_url_protocol(self):
+        res = tool_mcp_fetch("ftp://example.com")
+        self.assertIn("Solo se admiten URLs", res)
+
+    def test_mcp_fetch_mocked_success(self):
+        from unittest.mock import MagicMock, patch
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.headers.get_content_type.return_value = "application/json"
+        mock_resp.headers.get_content_charset.return_value = "utf-8"
+        mock_resp.read.return_value = b'{"status": "ok"}'
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            out = tool_mcp_fetch("https://api.example.com/data")
+            self.assertIn("MCP Fetch Status 200", out)
+            self.assertIn('{"status": "ok"}', out)
+
+    def test_mcp_git_info_subcommands(self):
+        # Subcomando no soportado
+        bad = tool_mcp_git_info("unsupported_subcmd", base_dir=self.base)
+        self.assertIn("no soportado", bad)
+
+        # Consulta status sobre el repo actual
+        status_out = tool_mcp_git_info("status", base_dir=Path.cwd())
+        self.assertIn("MCP Git status", status_out)
+
+        # Despacho via execute_tool
+        exec_out = execute_tool("mcp_git_info", {"subcommand": "branch"}, base_dir=Path.cwd())
+        self.assertIn("MCP Git branch", exec_out)
+
+    def test_mcp_sqlite_query_in_memory_and_file(self):
+        # Crear tabla e insertar fila
+        create_res = tool_mcp_sqlite_query(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+            db_path=":memory:",
+        )
+        self.assertIn("Sentencia ejecutada con éxito", create_res)
+
+        # Base de datos en archivo
+        db_file = self.base / "test.db"
+        init_res = tool_mcp_sqlite_query(
+            "CREATE TABLE items (id INT, title TEXT); INSERT INTO items VALUES (1, 'Arnes');",
+            db_path=str(db_file),
+            base_dir=self.base,
+        )
+        self.assertIn("Sentencia ejecutada", init_res)
+
+        # Consultar SELECT
+        select_res = tool_mcp_sqlite_query(
+            "SELECT * FROM items;",
+            db_path=str(db_file),
+            base_dir=self.base,
+        )
+        self.assertIn("Arnes", select_res)
+        self.assertIn("title", select_res)
+
+        # Error de sintaxis SQL
+        err_res = tool_mcp_sqlite_query("SELECT FROM INVALID;", db_path=":memory:")
+        self.assertIn("MCP SQLite Error", err_res)
+
+        # Bloqueo de path traversal o archivo protegido en sqlite
+        blocked = execute_tool(
+            "mcp_sqlite_query",
+            {"query": "SELECT 1;", "db_path": ".env"},
+            base_dir=self.base,
+        )
+        self.assertIn("Violación de seguridad", blocked)
 
 
 if __name__ == "__main__":

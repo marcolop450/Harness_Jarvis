@@ -136,12 +136,60 @@ def normalize_arguments(raw_args: Any) -> dict[str, Any]:
         return {"raw_arguments": raw_args, "parse_error": str(exc)}
 
 
+def format_clean_api_error(error: Exception) -> str:
+    """Mapea excepciones de API o red a mensajes limpios y concisos de una sola línea.
+
+    Elimina volcados de diccionarios JSON técnicos y categoriza por código HTTP.
+    """
+    status_code = getattr(error, "status_code", None)
+    err_str = str(error)
+
+    # Detección por código de estado explícito
+    if status_code == 429 or "429" in err_str or "rate limit" in err_str.lower():
+        return (
+            "[Error 429]: Límite de tokens/cuota agotado en el proveedor. "
+            "Espere un momento o cambie de modelo con /model."
+        )
+    if status_code == 401 or "401" in err_str or "invalid_api_key" in err_str.lower():
+        return (
+            "[Error 401]: Clave de API inválida o no autorizada. "
+            "Configure su clave con /key <proveedor> <clave>."
+        )
+    if status_code == 404 or "404" in err_str or "model_not_found" in err_str.lower():
+        return (
+            "[Error 404]: Modelo no encontrado o no disponible en este proveedor. "
+            "Seleccione otro modelo con /model."
+        )
+    if status_code == 400 or "400" in err_str or "tool_use_failed" in err_str.lower():
+        return (
+            "[Error 400]: Solicitud rechazada por formato o argumentos inválidos en el proveedor."
+        )
+    if status_code in (500, 502, 503, 504) or any(c in err_str for c in ("500", "502", "503", "504")):
+        return (
+            f"[Error {status_code or '50x'}]: Servicio del proveedor temporalmente fuera de línea. "
+            "Reintente en unos instantes."
+        )
+    if "connection" in err_str.lower() or "timeout" in err_str.lower():
+        return (
+            "[Error de Conexión]: No se pudo contactar al proveedor. "
+            "Verifique su conexión a Internet o el endpoint."
+        )
+
+    # Si es otra excepción, limpiar posibles bloques JSON
+    clean_msg = err_str.split("\n")[0]
+    if "{" in clean_msg and "}" in clean_msg:
+        # Extraer texto previo a cualquier JSON volcado
+        clean_msg = clean_msg.split("{")[0].strip(" -:")
+    return f"[Error]: {clean_msg}" if clean_msg else "[Error]: Ocurrió un error inesperado al consultar el modelo."
+
+
 def call_llm(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
     provider_name: str | None = None,
     model: str | None = None,
     client: OpenAI | None = None,
+    max_tokens: int | None = 1500,
 ) -> NormalizedResponse:
     """Ejecuta una llamada al modelo de lenguaje y retorna una respuesta normalizada."""
     config = resolve_provider(provider_name)
@@ -157,11 +205,18 @@ def call_llm(
         "messages": messages,
     }
 
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
-    response = active_client.chat.completions.create(**kwargs)
+    try:
+        response = active_client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        raise RuntimeError(format_clean_api_error(exc)) from exc
+
     choice = response.choices[0]
     msg = choice.message
 

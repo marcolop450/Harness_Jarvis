@@ -10,11 +10,13 @@ Permite:
 from __future__ import annotations
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_FILE: str = ".harness_models.json"
 SESSION_HISTORY_FILE: str = ".harness_session.json"
+SESSIONS_DIR_NAME: str = ".harness_sessions"
 
 DEFAULT_MODELS: dict[str, list[str]] = {}
 
@@ -78,6 +80,104 @@ def clear_session_history(base_dir: Path | None = None) -> bool:
             except Exception:
                 return False
     return True
+
+
+def get_sessions_dir(base_dir: Path | None = None) -> Path:
+    """Retorna el directorio de almacenamiento de sesiones históricas."""
+    base = (base_dir or Path.cwd()).resolve()
+    return base / SESSIONS_DIR_NAME
+
+
+def save_session_record(
+    session_id: str,
+    provider: str | None,
+    model: str | None,
+    messages: list[dict[str, Any]],
+    base_dir: Path | None = None,
+) -> Path | None:
+    """Guarda un registro detallado de la sesión en .harness_sessions/<session_id>.json."""
+    sessions_dir = get_sessions_dir(base_dir)
+    try:
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        record_file = sessions_dir / f"{session_id}.json"
+
+        clean_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, dict) and "role" in msg:
+                item = {"role": msg["role"], "content": msg.get("content", "")}
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    item["tool_calls"] = msg["tool_calls"]
+                if "tool_call_id" in msg and msg["tool_call_id"]:
+                    item["tool_call_id"] = msg["tool_call_id"]
+                clean_messages.append(item)
+
+        now = datetime.now()
+        data = {
+            "session_id": session_id,
+            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": now.isoformat(),
+            "provider": provider,
+            "model": model,
+            "message_count": len(clean_messages),
+            "messages": clean_messages,
+        }
+        record_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return record_file
+    except Exception:
+        return None
+
+
+def list_saved_sessions(base_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Devuelve la lista ordenada cronológicamente de sesiones guardadas en .harness_sessions/."""
+    sessions_dir = get_sessions_dir(base_dir)
+    if not sessions_dir.is_dir():
+        return []
+
+    records: list[dict[str, Any]] = []
+    for file in sessions_dir.glob("*.json"):
+        try:
+            content = json.loads(file.read_text(encoding="utf-8"))
+            if isinstance(content, dict) and "session_id" in content:
+                records.append({
+                    "session_id": content.get("session_id", file.stem),
+                    "created_at": content.get("created_at", ""),
+                    "timestamp": content.get("timestamp", ""),
+                    "provider": content.get("provider"),
+                    "model": content.get("model"),
+                    "message_count": content.get("message_count", len(content.get("messages", []))),
+                })
+        except Exception:
+            continue
+
+    # Ordenar por timestamp o fecha descendente (más reciente primero)
+    records.sort(key=lambda r: r.get("timestamp") or r.get("created_at") or "", reverse=True)
+    return records
+
+
+def load_session_by_id(session_id: str, base_dir: Path | None = None) -> dict[str, Any] | None:
+    """Carga los datos y mensajes de una sesión específica por su ID."""
+    sessions_dir = get_sessions_dir(base_dir)
+    clean_id = session_id.strip()
+    if clean_id.endswith(".json"):
+        clean_id = clean_id[:-5]
+
+    target_file = sessions_dir / f"{clean_id}.json"
+    if not target_file.is_file():
+        # Búsqueda parcial o insensible a mayúsculas
+        for file in sessions_dir.glob("*.json"):
+            if file.stem.lower() == clean_id.lower():
+                target_file = file
+                break
+        else:
+            return None
+
+    try:
+        data = json.loads(target_file.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "messages" in data:
+            return data
+    except Exception:
+        pass
+    return None
 
 
 def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
