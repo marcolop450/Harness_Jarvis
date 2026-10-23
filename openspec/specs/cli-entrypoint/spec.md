@@ -37,14 +37,34 @@ El sistema SHALL recibir la consulta del usuario, transferirla al bucle del agen
 - **THEN** el sistema envía la instrucción al bucle del agente y muestra la respuesta en pantalla
 
 ### Requirement: Comandos de control de sesión y contexto
-La interfaz CLI SHALL reconocer comandos de barra oblicua como /model y mostrar el directorio de trabajo activo (cwd) en el banner o prompt de la terminal.
+La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /clear y /reset, mostrar el directorio de trabajo activo (cwd) y el modelo activo en un prompt dinámico, y reflejar cambios de configuración inmediatamente en pantalla y en memoria.
 
 #### Scenario: Visualización del directorio de trabajo en consola
 - **GIVEN** la inicialización de la terminal del agente
 - **WHEN** se presenta la interfaz al usuario
-- **THEN** muestra explícitamente el directorio de trabajo actual (cwd)
+- **THEN** muestra explícitamente el directorio de trabajo actual (cwd) en el encabezado inicial y en el prompt dinámico
 
 #### Scenario: Ejecución de comando de ayuda o modelo
-- **GIVEN** una sesión activa en la terminal
+- **GIVEN** una sesión activa en la terminal con modelos registrados por el usuario
 - **WHEN** el usuario escribe '/model' sin argumentos
-- **THEN** la terminal muestra el proveedor y modelo en uso junto con las alternativas disponibles
+- **THEN** la terminal muestra una lista limpia y numerada de los modelos registrados por el usuario, indicando proveedor, nombre del modelo y estado de autenticación
+
+#### Scenario: Selección de modelo por índice numérico
+- **GIVEN** una sesión activa en la terminal donde se listaron los modelos numerados
+- **WHEN** el usuario ingresa '/model <numero>' con un índice válido (ejemplo: '/model 1')
+- **THEN** el sistema actualiza el modelo activo al correspondiente, persiste la selección y muestra una confirmación visual estilizada del cambio
+
+#### Scenario: Limpieza de pantalla de la terminal
+- **GIVEN** una sesión activa con texto acumulado en la consola
+- **WHEN** el usuario ingresa el comando '/clear'
+- **THEN** el sistema limpia la pantalla completa de la terminal y vuelve a dibujar el encabezado limpio manteniendo el estado de la sesión intacto
+
+#### Scenario: Activación inmediata de clave de API en memoria
+- **GIVEN** una sesión interactiva en ejecución donde un proveedor carece de clave en memoria
+- **WHEN** el usuario ejecuta el comando '/key <proveedor> <clave>'
+- **THEN** el sistema guarda la clave en el archivo .env y la inyecta inmediatamente en os.environ del proceso activo sin requerir reinicio de la terminal
+
+#### Scenario: Prompt dinámico contextual
+- **GIVEN** una sesión activa con un directorio de trabajo y modelo seleccionados
+- **WHEN** la terminal solicita la entrada del usuario
+- **THEN** el texto del prompt muestra de forma compacta el nombre del directorio y el modelo activo (ejemplo: '[Pruebas | ⚡ groq:llama-3.3-70b-versatile] jarvis> ')

@@ -25,7 +25,14 @@ class TestGuardrailsPathSecurity(unittest.TestCase):
                 self.assertIn("confidencial", str(ctx.exception))
 
     def test_blocks_sensitive_keys(self):
-        sensitive_files = ["id_rsa", "id_rsa.pub", "cert.pem", "private.key"]
+        sensitive_files = [
+            "id_rsa",
+            "id_rsa.pub",
+            "cert.pem",
+            "private.key",
+            ".harness_session.json",
+            ".harness_models.json",
+        ]
         for s_file in sensitive_files:
             with self.subTest(s_file=s_file):
                 with self.assertRaises(SecurityViolationError) as ctx:

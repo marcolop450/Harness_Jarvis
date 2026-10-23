@@ -22,6 +22,8 @@ SENSITIVE_PATTERNS: tuple[str, ...] = (
     "credentials",
     "credentials.*",
     ".git/config",
+    ".harness_session.json",
+    ".harness_models.json",
 )
 
 

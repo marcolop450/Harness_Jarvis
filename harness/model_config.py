@@ -9,24 +9,75 @@ Permite:
 
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_FILE: str = ".harness_models.json"
+SESSION_HISTORY_FILE: str = ".harness_session.json"
 
-DEFAULT_MODELS: dict[str, list[str]] = {
-    "gemini": ["gemini-2.5-flash", "gemini-1.5-pro"],
-    "groq": ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
-    "ollama": ["qwen2.5-coder:7b", "llama3.2:3b", "deepseek-r1:8b"],
-    "openai": ["gpt-4o-mini", "gpt-4o"],
-    "openrouter": ["meta-llama/llama-3.3-70b-instruct"],
-}
+DEFAULT_MODELS: dict[str, list[str]] = {}
 
 
 def get_default_config_path(base_dir: Path | None = None) -> Path:
     """Retorna la ruta hacia el archivo de configuración persistente."""
     base = (base_dir or Path.cwd()).resolve()
     return base / DEFAULT_CONFIG_FILE
+
+
+def get_session_history_path(base_dir: Path | None = None) -> Path:
+    """Retorna la ruta hacia el archivo de historial de sesión del espacio de trabajo."""
+    base = (base_dir or Path.cwd()).resolve()
+    return base / SESSION_HISTORY_FILE
+
+
+def load_session_history(base_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Carga el historial de mensajes de la sesión en el espacio de trabajo."""
+    path = get_session_history_path(base_dir)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [m for m in data if isinstance(m, dict) and "role" in m]
+    except Exception:
+        pass
+    return []
+
+
+def save_session_history(messages: list[dict[str, Any]], base_dir: Path | None = None) -> None:
+    """Persiste el historial de mensajes en el archivo de sesión del espacio de trabajo."""
+    path = get_session_history_path(base_dir)
+    try:
+        # Guardar lista limpia serializable
+        clean_messages: list[dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, dict) and "role" in msg:
+                item = {"role": msg["role"], "content": msg.get("content", "")}
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    item["tool_calls"] = msg["tool_calls"]
+                if "tool_call_id" in msg and msg["tool_call_id"]:
+                    item["tool_call_id"] = msg["tool_call_id"]
+                clean_messages.append(item)
+        path.write_text(json.dumps(clean_messages, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def clear_session_history(base_dir: Path | None = None) -> bool:
+    """Elimina el historial de mensajes de sesión del espacio de trabajo."""
+    path = get_session_history_path(base_dir)
+    if path.is_file():
+        try:
+            path.unlink()
+            return True
+        except Exception:
+            try:
+                path.write_text("[]", encoding="utf-8")
+                return True
+            except Exception:
+                return False
+    return True
 
 
 def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
@@ -68,18 +119,55 @@ def save_model_selection(
     config_path: Path | None = None,
 ) -> dict[str, Any]:
     """Registra un nuevo modelo, lo marca como activo y lo persiste en disco."""
+    return add_user_model(provider, model, config_path=config_path, set_active=True)
+
+
+def get_available_models_catalog(config_path: Path | None = None) -> list[dict[str, Any]]:
+    """Devuelve la lista ordenada y numerada de modelos registrados por el usuario."""
+    data = load_model_memory(config_path)
+    saved = data.get("saved_models", {})
+    catalog: list[dict[str, Any]] = []
+    idx = 1
+    active_prov = data.get("active_provider")
+    active_mod = data.get("active_model")
+
+    for prov in sorted(saved.keys()):
+        for mod in sorted(saved[prov]):
+            is_active = (prov == active_prov and mod == active_mod)
+            catalog.append({
+                "index": idx,
+                "provider": prov,
+                "model": mod,
+                "active": is_active,
+            })
+            idx += 1
+    return catalog
+
+
+def add_user_model(
+    provider: str,
+    model: str,
+    config_path: Path | None = None,
+    set_active: bool = True,
+) -> dict[str, Any]:
+    """Registra un modelo definido por el usuario y opcionalmente lo activa."""
     data = load_model_memory(config_path)
     prov = provider.strip().lower()
     mod = model.strip()
+    if not prov or not mod:
+        raise ValueError("El proveedor y el modelo no pueden estar vacíos")
 
-    data["active_provider"] = prov
-    data["active_model"] = mod
-
+    if "saved_models" not in data or not isinstance(data["saved_models"], dict):
+        data["saved_models"] = {}
     if prov not in data["saved_models"]:
         data["saved_models"][prov] = []
 
     if mod not in data["saved_models"][prov]:
         data["saved_models"][prov].append(mod)
+
+    if set_active:
+        data["active_provider"] = prov
+        data["active_model"] = mod
 
     path = config_path or get_default_config_path()
     try:
@@ -90,12 +178,99 @@ def save_model_selection(
     return data
 
 
+def remove_user_model(
+    target: str | int,
+    config_path: Path | None = None,
+) -> tuple[bool, str]:
+    """Elimina un modelo del catálogo por número de índice o por nombre."""
+    data = load_model_memory(config_path)
+    catalog = get_available_models_catalog(config_path)
+    target_str = str(target).strip()
+
+    found_prov: str | None = None
+    found_mod: str | None = None
+
+    if target_str.isdigit():
+        idx = int(target_str)
+        for item in catalog:
+            if item["index"] == idx:
+                found_prov = item["provider"]
+                found_mod = item["model"]
+                break
+    else:
+        # Primero buscar coincidencia exacta con el nombre del modelo o proveedor:modelo
+        for item in catalog:
+            if item["model"].lower() == target_str.lower() or f"{item['provider']}:{item['model']}".lower() == target_str.lower():
+                found_prov = item["provider"]
+                found_mod = item["model"]
+                break
+
+        if not found_prov and ":" in target_str:
+            p, m = target_str.split(":", 1)
+            p = p.strip().lower()
+            m = m.strip()
+            for item in catalog:
+                if item["provider"].lower() == p and item["model"].lower() == m.lower():
+                    found_prov = item["provider"]
+                    found_mod = item["model"]
+                    break
+
+    if not found_prov or not found_mod:
+        return False, f"No se encontró el modelo '{target}' en el catálogo."
+
+    if found_prov in data.get("saved_models", {}):
+        if found_mod in data["saved_models"][found_prov]:
+            data["saved_models"][found_prov].remove(found_mod)
+            if not data["saved_models"][found_prov]:
+                del data["saved_models"][found_prov]
+
+    if data.get("active_provider") == found_prov and data.get("active_model") == found_mod:
+        data["active_provider"] = None
+        data["active_model"] = None
+
+    path = config_path or get_default_config_path()
+    try:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    return True, f"Modelo {found_prov}:{found_mod} eliminado del catálogo."
+
+
+def resolve_model_selection(
+    selection: str | int,
+    config_path: Path | None = None,
+) -> tuple[str, str] | None:
+    """Resuelve una selección (por índice numérico o por nombre) contra el catálogo registrado."""
+    catalog = get_available_models_catalog(config_path)
+    sel_str = str(selection).strip()
+    if sel_str.isdigit():
+        idx = int(sel_str)
+        for item in catalog:
+            if item["index"] == idx:
+                return item["provider"], item["model"]
+    else:
+        # Primero coincidencia directa por nombre de modelo o proveedor:modelo
+        for item in catalog:
+            if item["model"].lower() == sel_str.lower() or f"{item['provider']}:{item['model']}".lower() == sel_str.lower():
+                return item["provider"], item["model"]
+
+        if ":" in sel_str:
+            p, m = sel_str.split(":", 1)
+            p = p.strip().lower()
+            m = m.strip()
+            for item in catalog:
+                if item["provider"].lower() == p and item["model"].lower() == m.lower():
+                    return item["provider"], item["model"]
+    return None
+
+
 def save_api_key_to_env(
     provider: str,
     api_key: str,
     env_path: Path | None = None,
 ) -> None:
-    """Guarda o actualiza una variable de API Key en el archivo .env local."""
+    """Guarda o actualiza una variable de API Key en el archivo .env local e inyecta en memoria."""
     target_env = env_path or (Path.cwd() / ".env")
     env_var_map = {
         "openai": "OPENAI_API_KEY",
@@ -105,6 +280,10 @@ def save_api_key_to_env(
         "ollama": "OLLAMA_API_KEY",
     }
     var_name = env_var_map.get(provider.lower(), f"{provider.upper()}_API_KEY")
+    cleaned_key = api_key.strip()
+
+    # Inyección inmediata en memoria para activación en vivo
+    os.environ[var_name] = cleaned_key
 
     lines: list[str] = []
     found = False
@@ -114,7 +293,7 @@ def save_api_key_to_env(
             content = target_env.read_text(encoding="utf-8")
             for line in content.splitlines():
                 if line.startswith(f"{var_name}=") or line.startswith(f"{var_name} ="):
-                    lines.append(f"{var_name}={api_key.strip()}")
+                    lines.append(f"{var_name}={cleaned_key}")
                     found = True
                 else:
                     lines.append(line)
@@ -122,7 +301,7 @@ def save_api_key_to_env(
             pass
 
     if not found:
-        lines.append(f"{var_name}={api_key.strip()}")
+        lines.append(f"{var_name}={cleaned_key}")
 
     target_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

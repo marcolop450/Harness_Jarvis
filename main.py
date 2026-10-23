@@ -19,10 +19,17 @@ from dotenv import load_dotenv
 from harness.agent_loop import MAX_STEPS, run_agent_loop
 from harness.llm_provider import SUPPORTED_PROVIDERS, resolve_provider
 from harness.model_config import (
+    add_user_model,
     build_workspace_system_prompt,
+    clear_session_history,
+    get_available_models_catalog,
     load_model_memory,
+    load_session_history,
+    remove_user_model,
+    resolve_model_selection,
     save_api_key_to_env,
     save_model_selection,
+    save_session_history,
 )
 
 DEFAULT_BASE_PROMPT: str = (
@@ -44,6 +51,15 @@ def has_valid_key_for_provider(provider: str | None) -> bool:
     return bool(os.getenv(info["env_key"]))
 
 
+def get_prompt_symbol() -> str:
+    """Retorna un símbolo para el prompt que no cause errores de codificación en Windows."""
+    try:
+        "⚡".encode(sys.stdout.encoding or "utf-8")
+        return "⚡"
+    except Exception:
+        return "*"
+
+
 def print_banner(
     provider_name: str | None,
     model_name: str | None,
@@ -58,7 +74,7 @@ def print_banner(
     else:
         prov_str = provider_name.upper()
         model_str = model_name
-        status_str = "CONFIGURADA" if has_key else "NO DETECTADA (Usa /key o /model ollama)"
+        status_str = "CONFIGURADA" if has_key else "NO DETECTADA (Usa /key o /model add/ollama)"
 
     banner = f"""
 ==============================================================
@@ -68,7 +84,7 @@ def print_banner(
   Modelo    : {model_str}
   Estado API: {status_str}
   Limite    : MAX_STEPS={MAX_STEPS} por consulta
-  Comandos  : /model [prov] [mod]  |  /key <prov> <clave>  |  exit
+  Comandos  : /model  |  /key <prov> <clave>  |  /clear  |  /reset  |  exit
 ==============================================================
 """
     print(banner.strip())
@@ -112,61 +128,170 @@ def handle_slash_command(
     current_provider: str | None,
     current_model: str | None,
     cwd: Path,
+    conversation_history: list[dict[str, Any]] | None = None,
 ) -> tuple[str | None, str | None, bool]:
-    """Procesa comandos de barra oblicua (/model, /key, /cwd).
+    """Procesa comandos de barra oblicua (/model, /key, /cwd, /clear, /reset).
 
     Retorna (nuevo_proveedor, nuevo_modelo, handled).
     """
     parts = command_line.strip().split()
+    if not parts:
+        return current_provider, current_model, False
     cmd = parts[0].lower()
 
-    if cmd == "/cwd" or cmd == "/workspace":
+    if cmd in ("/cwd", "/workspace"):
         print(f"\n[+] Directorio de trabajo activo: {cwd}")
         return current_provider, current_model, True
 
+    if cmd == "/clear":
+        os.system("cls" if os.name == "nt" else "clear")
+        has_key = has_valid_key_for_provider(current_provider) if current_provider else False
+        print_banner(current_provider, current_model, cwd, has_key)
+        return current_provider, current_model, True
+
+    if cmd == "/reset":
+        if conversation_history is not None:
+            conversation_history.clear()
+        clear_session_history(cwd)
+        print("\n+--------------------------------------------------------+")
+        print("| [+] Memoria de conversación reiniciada para la carpeta |")
+        print("+--------------------------------------------------------+")
+        return current_provider, current_model, True
+
     if cmd == "/model":
-        if len(parts) == 1:
-            memory = load_model_memory()
+        config_path = cwd / ".harness_models.json"
+
+        # Subcomando: /model o /model list -> mostrar catálogo numerado
+        if len(parts) == 1 or (len(parts) == 2 and parts[1].lower() == "list"):
+            catalog = get_available_models_catalog(config_path)
             prov_disp = current_provider.upper() if current_provider else "[SIN CONFIGURAR]"
             mod_disp = current_model if current_model else "[SIN CONFIGURAR]"
-            print(f"\n[+] Proveedor activo: {prov_disp} | Modelo: {mod_disp}")
-            print("[+] Modelos guardados en memoria:")
-            for prov, models in memory.get("saved_models", {}).items():
-                active_mark = " (activo)" if current_provider and prov == current_provider.lower() else ""
-                print(f"    - {prov.upper()}{active_mark}: {', '.join(models)}")
-            print("\nPara cambiar de modelo usa: /model <proveedor> <nombre_modelo>")
+
+            print("\n+--------------------------------------------------------+")
+            print(f"| Modelo activo: {prov_disp} -> {mod_disp}".ljust(57) + "|")
+            print("+--------------------------------------------------------+")
+
+            if not catalog:
+                print("| (Catálogo vacío: no tienes modelos registrados)       |")
+                print("| Para agregar uno usa: /model add <proveedor> <modelo>  |")
+                print("+--------------------------------------------------------+")
+            else:
+                print("| Modelos registrados:                                   |")
+                for item in catalog:
+                    has_k = has_valid_key_for_provider(item["provider"])
+                    k_str = "[OK Clave]" if has_k else "[Sin clave]"
+                    if item["provider"] == "ollama":
+                        k_str = "[OK Local]"
+                    act_str = " *Activo" if item["active"] else ""
+                    line_str = f"  [{item['index']}] {item['provider'].upper()}: {item['model']} {k_str}{act_str}"
+                    print(f"| {line_str}".ljust(57) + "|")
+                print("+--------------------------------------------------------+")
+                print("| Uso: /model <numero> | /model add <prov> <modelo>      |")
+                print("|      /model rm <numero>                                |")
+                print("+--------------------------------------------------------+")
             return current_provider, current_model, True
 
-        elif len(parts) >= 3:
+        # Subcomando: /model add <prov> <modelo>
+        if parts[1].lower() == "add":
+            if len(parts) < 4:
+                print("\n[Uso]: /model add <proveedor> <nombre_modelo>")
+                print(f"Proveedores soportados: {', '.join(SUPPORTED_PROVIDERS.keys())}")
+                return current_provider, current_model, True
+            prov = parts[2].lower()
+            mod = parts[3]
+            if prov not in SUPPORTED_PROVIDERS:
+                print(f"\n[Error]: Proveedor '{prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
+                return current_provider, current_model, True
+            add_user_model(prov, mod, config_path, set_active=True)
+            print("\n+--------------------------------------------------------+")
+            print(f"| [+] Modelo agregado y activado:                        |")
+            print(f"|     {prov.upper()} -> {mod}".ljust(57) + "|")
+            print("+--------------------------------------------------------+")
+            return prov, mod, True
+
+        # Subcomando: /model rm <target>
+        if parts[1].lower() in ("rm", "del", "remove", "delete"):
+            if len(parts) < 3:
+                print("\n[Uso]: /model rm <numero_de_indice_o_nombre>")
+                return current_provider, current_model, True
+            target = parts[2]
+            ok, msg = remove_user_model(target, config_path)
+            if ok:
+                print(f"\n[+] {msg}")
+                mem = load_model_memory(config_path)
+                return mem.get("active_provider"), mem.get("active_model"), True
+            else:
+                print(f"\n[Error]: {msg}")
+                return current_provider, current_model, True
+
+        # Subcomando: /model <numero>
+        if len(parts) == 2 and parts[1].isdigit():
+            idx = int(parts[1])
+            res = resolve_model_selection(idx, config_path)
+            if not res:
+                print(f"\n[Error]: No existe el modelo número [{idx}] en el catálogo.")
+                return current_provider, current_model, True
+            new_prov, new_model = res
+            save_model_selection(new_prov, new_model, config_path)
+            has_k = has_valid_key_for_provider(new_prov)
+            auth_str = "Autenticado y listo" if has_k else "Requiere clave con /key"
+            if new_prov == "ollama":
+                auth_str = "Local (Ollama)"
+            print("\n+--------------------------------------------------------+")
+            print(f"| [+] Modelo activo cambiado a:                          |")
+            print(f"|     {new_prov.upper()} -> {new_model}".ljust(57) + "|")
+            print(f"|     Estado: {auth_str}".ljust(57) + "|")
+            print("+--------------------------------------------------------+")
+            return new_prov, new_model, True
+
+        # Subcomando clásico: /model <prov> <modelo>
+        if len(parts) >= 3 and parts[1].lower() not in ("add", "rm", "del", "remove"):
             new_prov = parts[1].lower()
             new_model = parts[2]
             if new_prov not in SUPPORTED_PROVIDERS:
                 print(f"\n[Error]: Proveedor '{new_prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
                 return current_provider, current_model, True
 
-            save_model_selection(new_prov, new_model)
+            save_model_selection(new_prov, new_model, config_path)
             print(f"\n[+] Modelo actualizado y recordado: {new_prov.upper()} -> {new_model}")
             return new_prov, new_model, True
-        else:
-            print("\nUso: /model o /model <proveedor> <nombre_modelo>")
-            return current_provider, current_model, True
+
+        # Subcomando: /model <nombre_o_proveedor:nombre>
+        if len(parts) == 2:
+            res = resolve_model_selection(parts[1], config_path)
+            if res:
+                new_prov, new_model = res
+                save_model_selection(new_prov, new_model, config_path)
+                print(f"\n[+] Modelo actualizado y recordado: {new_prov.upper()} -> {new_model}")
+                return new_prov, new_model, True
+
+        print("\nUso: /model  |  /model <numero>  |  /model add <prov> <mod>  |  /model rm <numero>")
+        return current_provider, current_model, True
 
     if cmd == "/key":
         if len(parts) >= 3:
             target_prov = parts[1].lower()
             key_val = parts[2]
             if target_prov not in SUPPORTED_PROVIDERS:
-                print(f"\n[Error]: Proveedor '{target_prov}' no soportado.")
+                print(f"\n[Error]: Proveedor '{target_prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
                 return current_provider, current_model, True
-            save_api_key_to_env(target_prov, key_val)
-            load_dotenv(override=True)
-            print(f"\n[+] Clave para {target_prov.upper()} guardada exitosamente en .env.")
+            save_api_key_to_env(target_prov, key_val, env_path=cwd / ".env")
+            load_dotenv(cwd / ".env", override=True)
+            print("\n+--------------------------------------------------------+")
+            print(f"| [+] Clave para {target_prov.upper()} activada en memoria y guardada. |")
+            print("+--------------------------------------------------------+")
 
-            # Si no había proveedor activo, activar automáticamente el configurado
             if not current_provider:
-                current_provider = target_prov
-                current_model = SUPPORTED_PROVIDERS[target_prov]["default_model"]
-                save_model_selection(current_provider, current_model)
+                config_path = cwd / ".harness_models.json"
+                catalog = get_available_models_catalog(config_path)
+                found = next((m for m in catalog if m["provider"] == target_prov), None)
+                if found:
+                    current_provider = target_prov
+                    current_model = found["model"]
+                else:
+                    current_provider = target_prov
+                    current_model = SUPPORTED_PROVIDERS[target_prov]["default_model"]
+                    add_user_model(current_provider, current_model, config_path=config_path, set_active=True)
                 print(f"[+] Proveedor configurado automáticamente a: {current_provider.upper()} ({current_model})")
 
             return current_provider, current_model, True
@@ -188,7 +313,7 @@ def run_repl(
     working_dir = (cwd or Path.cwd()).resolve()
 
     # Cargar memoria persistente de modelos sin asumir proveedor por defecto
-    memory = load_model_memory()
+    memory = load_model_memory(working_dir / ".harness_models.json")
     raw_provider = provider_name or memory.get("active_provider")
     active_provider = raw_provider.lower() if raw_provider else None
 
@@ -203,17 +328,24 @@ def run_repl(
     has_key = has_valid_key_for_provider(active_provider) if active_provider else False
     print_banner(active_provider, active_model, working_dir, has_key)
 
-    conversation_history: list[dict[str, Any]] = []
+    # Cargar historial de conversación de la carpeta de trabajo
+    conversation_history: list[dict[str, Any]] = load_session_history(working_dir)
+    if conversation_history:
+        print(f"[*] Historial de sesión cargado ({len(conversation_history)} mensajes previos en esta carpeta).")
 
     def on_step(current: int, total: int) -> None:
         if current > 1:
             print(f"  [*] [Paso {current}/{total}] Razonando...", flush=True)
 
     folder_name = working_dir.name or str(working_dir)
+    sym = get_prompt_symbol()
 
     while True:
         try:
-            prompt_symbol = f"\n[{folder_name}] jarvis> "
+            if active_provider and active_model:
+                prompt_symbol = f"\n[{folder_name} | {sym} {active_provider}:{active_model}] jarvis> "
+            else:
+                prompt_symbol = f"\n[{folder_name} | {sym} [sin configurar]] jarvis> "
             user_input = input(prompt_symbol).strip()
         except (KeyboardInterrupt, EOFError):
             print("\nSesión finalizada por el usuario.")
@@ -229,7 +361,7 @@ def run_repl(
         # Manejo de comandos slash
         if user_input.startswith("/"):
             active_provider, active_model, handled = handle_slash_command(
-                user_input, active_provider, active_model, working_dir
+                user_input, active_provider, active_model, working_dir, conversation_history
             )
             if handled:
                 continue
@@ -239,7 +371,8 @@ def run_repl(
             print(
                 "\n[Aviso]: No tienes ningún proveedor ni modelo configurado todavía.\n"
                 "  - Si tienes una clave API:  /key <proveedor> <tu_clave>\n"
-                "  - O si usas Ollama local:   /model ollama qwen2.5-coder:7b"
+                "  - O agrega tu modelo con:   /model add <proveedor> <nombre_modelo>\n"
+                "  - O si usas Ollama local:   /model add ollama qwen2.5-coder:7b"
             )
             continue
 
@@ -248,7 +381,7 @@ def run_repl(
             print(
                 f"\n[Aviso]: No se ha detectado una clave de API para el proveedor '{active_provider.upper()}'.\n"
                 f"  - Configura tu clave en la terminal con: /key {active_provider} <tu_clave>\n"
-                f"  - O usa Ollama local (sin API) con:     /model ollama qwen2.5-coder:7b"
+                f"  - O agrega un modelo local Ollama con:  /model add ollama qwen2.5-coder:7b"
             )
             continue
 
@@ -265,6 +398,7 @@ def run_repl(
                 base_dir=working_dir,
                 on_step=on_step,
             )
+            save_session_history(conversation_history, base_dir=working_dir)
             print(f"\n{reply}")
         except Exception as exc:
             print(f"\n[Error durante el turno]: {exc}", file=sys.stderr)
@@ -274,6 +408,8 @@ def run_repl(
 
 def main(argv: list[str] | None = None) -> int:
     """Función principal de ejecución."""
+    load_dotenv(Path.cwd() / ".env")
+    load_dotenv()
     args = parse_args(argv)
 
     if args.prompt:

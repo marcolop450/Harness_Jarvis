@@ -64,6 +64,98 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(model, "llama-3.3")
         self.assertIn("GROQ -> llama-3.3", buf.getvalue())
 
+    def test_handle_slash_command_clear(self):
+        buf = io.StringIO()
+        cwd = Path("D:/Harness Jarvis")
+        with patch("os.system") as mock_sys, patch("sys.stdout", buf):
+            prov, model, handled = handle_slash_command("/clear", "groq", "llama-3.3", cwd)
+        self.assertTrue(handled)
+        self.assertEqual(prov, "groq")
+        self.assertEqual(model, "llama-3.3")
+        mock_sys.assert_called_once()
+        self.assertIn("Harness Jarvis CLI", buf.getvalue())
+
+    def test_handle_slash_command_reset(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            session_file = tmp_path / ".harness_session.json"
+            session_file.write_text('[{"role": "user", "content": "hola"}]', encoding="utf-8")
+
+            conv_history = [{"role": "user", "content": "hola"}]
+            buf = io.StringIO()
+            with patch("sys.stdout", buf):
+                prov, model, handled = handle_slash_command(
+                    "/reset", "groq", "llama-3.3", tmp_path, conversation_history=conv_history
+                )
+            self.assertTrue(handled)
+            self.assertEqual(len(conv_history), 0)
+            self.assertFalse(session_file.exists())
+            self.assertIn("Memoria de conversación reiniciada", buf.getvalue())
+
+    def test_handle_slash_command_model_add_list_select_rm(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # 1. /model en catálogo vacío
+            buf1 = io.StringIO()
+            with patch("sys.stdout", buf1):
+                p, m, h = handle_slash_command("/model", None, None, tmp_path)
+            self.assertTrue(h)
+            self.assertIn("Catálogo vacío", buf1.getvalue())
+
+            # 2. /model add groq llama-3.3-70b-versatile
+            buf2 = io.StringIO()
+            with patch("sys.stdout", buf2):
+                p, m, h = handle_slash_command("/model add groq llama-3.3-70b-versatile", None, None, tmp_path)
+            self.assertTrue(h)
+            self.assertEqual(p, "groq")
+            self.assertEqual(m, "llama-3.3-70b-versatile")
+            self.assertIn("Modelo agregado y activado", buf2.getvalue())
+
+            # Agregar segundo modelo sin activar
+            handle_slash_command("/model add ollama qwen2.5-coder:7b", p, m, tmp_path)
+
+            # 3. /model lista numerada
+            buf3 = io.StringIO()
+            with patch("sys.stdout", buf3):
+                p, m, h = handle_slash_command("/model", p, m, tmp_path)
+            self.assertTrue(h)
+            self.assertIn("[1]", buf3.getvalue())
+            self.assertIn("[2]", buf3.getvalue())
+
+            # 4. /model 2 seleccionar por número
+            buf4 = io.StringIO()
+            with patch("sys.stdout", buf4):
+                p, m, h = handle_slash_command("/model 2", p, m, tmp_path)
+            self.assertTrue(h)
+            self.assertEqual(p, "ollama")
+            self.assertEqual(m, "qwen2.5-coder:7b")
+            self.assertIn("Modelo activo cambiado a", buf4.getvalue())
+
+            # 5. /model rm 1 eliminar
+            buf5 = io.StringIO()
+            with patch("sys.stdout", buf5):
+                p, m, h = handle_slash_command("/model rm 1", p, m, tmp_path)
+            self.assertTrue(h)
+            self.assertIn("eliminado del catálogo", buf5.getvalue())
+
+    def test_repl_dynamic_prompt_contextual(self):
+        buf = io.StringIO()
+        prompts_seen = []
+
+        def mock_input(prompt):
+            prompts_seen.append(prompt)
+            return "exit"
+
+        with patch("main.load_model_memory", return_value={"active_provider": "groq", "active_model": "llama-3.3"}):
+            with patch("builtins.input", side_effect=mock_input):
+                with patch("sys.stdout", buf):
+                    ret = main([])
+        self.assertEqual(ret, 0)
+        self.assertTrue(any("⚡ groq:llama-3.3" in p for p in prompts_seen))
+
     def test_repl_graceful_exit_without_api_keys(self):
         buf = io.StringIO()
         with patch("builtins.input", side_effect=["exit"]):
