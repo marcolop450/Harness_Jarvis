@@ -21,6 +21,8 @@ class TestModelConfig(unittest.TestCase):
     def test_load_default_when_missing(self):
         config = load_model_memory(self.config_path)
         self.assertIn("active_provider", config)
+        self.assertIsNone(config["active_provider"])
+        self.assertIsNone(config["active_model"])
         self.assertIn("saved_models", config)
         self.assertTrue(self.config_path.exists())
 

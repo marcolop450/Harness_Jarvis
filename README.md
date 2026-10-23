@@ -11,6 +11,7 @@ Haz doble clic en `install.bat` o ejecútalo en la consola de comandos:
 ```cmd
 install.bat
 ```
+*El instalador compila los metadatos, registra el comando global `jarvis` y configura automáticamente la ruta en el PATH de Windows de forma permanente.*
 
 ### En PowerShell:
 ```powershell
@@ -22,18 +23,20 @@ install.bat
 python -m pip install -e .
 ```
 
-El instalador compilará los metadatos y registrará el comando global `jarvis` en tu terminal.
-
 ---
 
 ## 💻 Uso de la CLI
 
-Una vez instalado, puedes invocar Jarvis desde cualquier carpeta o terminal:
+Una vez instalado, puedes invocar Jarvis desde **cualquier carpeta** o terminal de tu PC:
 
 ### Modo interactivo (REPL)
 ```bash
 jarvis
 ```
+
+> **Primer inicio limpio**: Si aún no has configurado ningún modelo o clave de API, Jarvis iniciará en estado `[SIN CONFIGURAR]`. Puedes comenzar de inmediato usando:
+> - Para IA local sin costo (vía Ollama): `/model ollama qwen2.5-coder:7b`
+> - Para proveedores en la nube: `/key groq <tu_clave>` o `/key gemini <tu_clave>`
 
 ### Ejecución directa con prompt inicial
 ```bash

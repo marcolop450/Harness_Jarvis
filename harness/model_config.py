@@ -32,7 +32,7 @@ def get_default_config_path(base_dir: Path | None = None) -> Path:
 def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
     """Carga la configuración y memoria de modelos desde el archivo JSON.
 
-    Si no existe o está corrupto, inicializa con valores predeterminados seguros.
+    Si no existe o está corrupto, inicializa con valores limpios sin asumir proveedor.
     """
     path = config_path or get_default_config_path()
     if path.exists():
@@ -42,16 +42,16 @@ def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
                 if "saved_models" not in data or not isinstance(data["saved_models"], dict):
                     data["saved_models"] = {k: list(v) for k, v in DEFAULT_MODELS.items()}
                 if "active_provider" not in data:
-                    data["active_provider"] = "gemini"
+                    data["active_provider"] = None
                 if "active_model" not in data:
-                    data["active_model"] = "gemini-2.5-flash"
+                    data["active_model"] = None
                 return data
         except Exception:
             pass
 
-    initial_config = {
-        "active_provider": "gemini",
-        "active_model": "gemini-2.5-flash",
+    initial_config: dict[str, Any] = {
+        "active_provider": None,
+        "active_model": None,
         "saved_models": {k: list(v) for k, v in DEFAULT_MODELS.items()},
     }
     try:

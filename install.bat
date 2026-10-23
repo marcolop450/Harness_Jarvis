@@ -26,6 +26,8 @@ python -m pip install -e .
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Hubo un problema al ejecutar 'python -m pip install -e .'.
+    echo Si tienes una sesion de 'jarvis' abierta en otra ventana de consola,
+    echo por favor cierrala e intentalo nuevamente.
     if "%CI%"=="" if not "%1"=="--no-pause" pause
     exit /b %errorlevel%
 )
@@ -34,22 +36,32 @@ echo.
 echo [OK] Paquete instalado correctamente.
 echo.
 
-:: 3. Verificar si el comando jarvis esta en el PATH
+:: 3. Configurar la carpeta Scripts en el PATH de usuario si no esta presente
+echo [INFO] Verificando registro en PATH del usuario...
+python -c "import sysconfig, winreg; s = sysconfig.get_path('scripts'); k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_READ | winreg.KEY_WRITE); v = ''; (v, _) = winreg.QueryValueEx(k, 'Path'); (winreg.SetValueEx(k, 'Path', 0, winreg.REG_EXPAND_SZ, (v.rstrip(';') + ';' + s).strip(';')), print('[OK] Ruta de scripts anadida permanentemente al PATH del usuario.')) if s.lower() not in v.lower() else print('[OK] La ruta de scripts ya se encuentra en el PATH.')"
+
+:: 4. Actualizar la variable PATH en la sesion activa actual
+for /f "delims=" %%I in ('python -c "import sysconfig; print(sysconfig.get_path('scripts'))"') do (
+    set "PATH=%%I;!PATH!"
+)
+
+echo.
+:: 5. Verificar disponibilidad del comando jarvis
 where jarvis >nul 2>nul
 if %errorlevel% equ 0 (
     echo ===================================================
     echo  Instalacion completada con exito!
     echo ===================================================
+    echo El comando 'jarvis' quedo configurado permanentemente en tu sistema.
     echo Puedes ejecutar Jarvis desde cualquier terminal escribiendo:
     echo.
     echo    jarvis
     echo.
 ) else (
-    echo [ADVERTENCIA] El comando 'jarvis' se instalo pero la carpeta 'Scripts'
-    echo de Python no parece estar en tu variable PATH actual.
+    echo [ADVERTENCIA] No se pudo verificar 'jarvis' en el PATH inmediato.
+    echo Puedes ejecutarlo directamente desde la carpeta del proyecto con:
     echo.
-    echo Puedes agregarlo a tus variables de entorno o ejecutarlo temporalmente con:
-    echo.
+    echo    jarvis
     echo    python -m main
     echo.
 )

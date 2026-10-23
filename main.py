@@ -31,8 +31,10 @@ DEFAULT_BASE_PROMPT: str = (
 )
 
 
-def has_valid_key_for_provider(provider: str) -> bool:
+def has_valid_key_for_provider(provider: str | None) -> bool:
     """Verifica si el entorno cuenta con una clave configurada para el proveedor."""
+    if not provider:
+        return False
     prov = provider.lower()
     if prov == "ollama":
         return True
@@ -43,19 +45,27 @@ def has_valid_key_for_provider(provider: str) -> bool:
 
 
 def print_banner(
-    provider_name: str,
-    model_name: str,
+    provider_name: str | None,
+    model_name: str | None,
     cwd: Path,
     has_key: bool,
 ) -> None:
     """Imprime el encabezado visual del agente en la terminal."""
-    status_str = "CONFIGURADA" if has_key else "NO DETECTADA (Usa /key o /model ollama)"
+    if not provider_name or not model_name:
+        prov_str = "[SIN CONFIGURAR]"
+        model_str = "[SIN CONFIGURAR]"
+        status_str = "Pendiente (Usa /key o /model para empezar)"
+    else:
+        prov_str = provider_name.upper()
+        model_str = model_name
+        status_str = "CONFIGURADA" if has_key else "NO DETECTADA (Usa /key o /model ollama)"
+
     banner = f"""
 ==============================================================
   Harness Jarvis CLI - Multi-API Agent
   Espacio   : {cwd}
-  Proveedor : {provider_name.upper()}
-  Modelo    : {model_name}
+  Proveedor : {prov_str}
+  Modelo    : {model_str}
   Estado API: {status_str}
   Limite    : MAX_STEPS={MAX_STEPS} por consulta
   Comandos  : /model [prov] [mod]  |  /key <prov> <clave>  |  exit
@@ -99,10 +109,10 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
 
 def handle_slash_command(
     command_line: str,
-    current_provider: str,
-    current_model: str,
+    current_provider: str | None,
+    current_model: str | None,
     cwd: Path,
-) -> tuple[str, str, bool]:
+) -> tuple[str | None, str | None, bool]:
     """Procesa comandos de barra oblicua (/model, /key, /cwd).
 
     Retorna (nuevo_proveedor, nuevo_modelo, handled).
@@ -117,10 +127,12 @@ def handle_slash_command(
     if cmd == "/model":
         if len(parts) == 1:
             memory = load_model_memory()
-            print(f"\n[+] Proveedor activo: {current_provider.upper()} | Modelo: {current_model}")
+            prov_disp = current_provider.upper() if current_provider else "[SIN CONFIGURAR]"
+            mod_disp = current_model if current_model else "[SIN CONFIGURAR]"
+            print(f"\n[+] Proveedor activo: {prov_disp} | Modelo: {mod_disp}")
             print("[+] Modelos guardados en memoria:")
             for prov, models in memory.get("saved_models", {}).items():
-                active_mark = " (activo)" if prov == current_provider else ""
+                active_mark = " (activo)" if current_provider and prov == current_provider.lower() else ""
                 print(f"    - {prov.upper()}{active_mark}: {', '.join(models)}")
             print("\nPara cambiar de modelo usa: /model <proveedor> <nombre_modelo>")
             return current_provider, current_model, True
@@ -149,6 +161,14 @@ def handle_slash_command(
             save_api_key_to_env(target_prov, key_val)
             load_dotenv(override=True)
             print(f"\n[+] Clave para {target_prov.upper()} guardada exitosamente en .env.")
+
+            # Si no había proveedor activo, activar automáticamente el configurado
+            if not current_provider:
+                current_provider = target_prov
+                current_model = SUPPORTED_PROVIDERS[target_prov]["default_model"]
+                save_model_selection(current_provider, current_model)
+                print(f"[+] Proveedor configurado automáticamente a: {current_provider.upper()} ({current_model})")
+
             return current_provider, current_model, True
         else:
             print("\nUso: /key <proveedor> <tu_clave_de_api>")
@@ -167,12 +187,20 @@ def run_repl(
     load_dotenv()
     working_dir = (cwd or Path.cwd()).resolve()
 
-    # Cargar memoria persistente de modelos
+    # Cargar memoria persistente de modelos sin asumir proveedor por defecto
     memory = load_model_memory()
-    active_provider = (provider_name or memory.get("active_provider") or "gemini").lower()
-    active_model = model or memory.get("active_model") or SUPPORTED_PROVIDERS[active_provider]["default_model"]
+    raw_provider = provider_name or memory.get("active_provider")
+    active_provider = raw_provider.lower() if raw_provider else None
 
-    has_key = has_valid_key_for_provider(active_provider)
+    raw_model = model or memory.get("active_model")
+    active_model = raw_model if raw_model else None
+
+    if active_provider and not active_model:
+        info = SUPPORTED_PROVIDERS.get(active_provider)
+        if info:
+            active_model = info["default_model"]
+
+    has_key = has_valid_key_for_provider(active_provider) if active_provider else False
     print_banner(active_provider, active_model, working_dir, has_key)
 
     conversation_history: list[dict[str, Any]] = []
@@ -205,6 +233,15 @@ def run_repl(
             )
             if handled:
                 continue
+
+        # Validar si no hay ningún proveedor configurado
+        if not active_provider or not active_model:
+            print(
+                "\n[Aviso]: No tienes ningún proveedor ni modelo configurado todavía.\n"
+                "  - Si tienes una clave API:  /key <proveedor> <tu_clave>\n"
+                "  - O si usas Ollama local:   /model ollama qwen2.5-coder:7b"
+            )
+            continue
 
         # Validar si el proveedor requiere API key y si está ausente
         if not has_valid_key_for_provider(active_provider):
@@ -241,13 +278,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.prompt:
         try:
-            config = resolve_provider(args.provider)
+            memory = load_model_memory()
+            target_provider = args.provider or memory.get("active_provider")
+            if not target_provider:
+                print(
+                    "[Error]: No hay ningún proveedor configurado. Ejecuta 'jarvis' e ingresa /key o /model.",
+                    file=sys.stderr,
+                )
+                return 1
+            config = resolve_provider(target_provider)
+            target_model = args.model or memory.get("active_model") or config.default_model
             full_system = build_workspace_system_prompt(args.system)
             reply, _ = run_agent_loop(
                 prompt=args.prompt,
                 system_prompt=full_system,
                 provider_name=config.name,
-                model=args.model or config.default_model,
+                model=target_model,
             )
             print(reply)
             return 0

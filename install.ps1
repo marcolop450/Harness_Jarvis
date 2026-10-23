@@ -40,6 +40,7 @@ try {
 catch {
     Write-Host ""
     Write-Host "[ERROR] Hubo un problema al ejecutar 'python -m pip install -e .': $_" -ForegroundColor Red
+    Write-Host "Si tienes una sesion de 'jarvis' abierta en otra consola, por favor cierrala e intentalo nuevamente." -ForegroundColor Yellow
     if (-not $NoPause -and -not $env:CI) {
         Read-Host "Presiona Enter para salir..."
     }
@@ -50,22 +51,42 @@ Write-Host ""
 Write-Host "[OK] Paquete instalado correctamente." -ForegroundColor Green
 Write-Host ""
 
-# 3. Verificar si el comando jarvis esta en el PATH
+# 3. Configurar Scripts en el PATH de usuario si no esta presente
+$scriptsPath = (& python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ([string]::IsNullOrWhiteSpace($userPath)) {
+    [Environment]::SetEnvironmentVariable("Path", $scriptsPath, "User")
+    Write-Host "[OK] Ruta de scripts anadida permanentemente al PATH del usuario." -ForegroundColor Green
+} elseif ($userPath -notlike ("*" + $scriptsPath + "*")) {
+    $newPath = $userPath.TrimEnd(";") + ";" + $scriptsPath
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+    Write-Host "[OK] Ruta de scripts anadida permanentemente al PATH del usuario." -ForegroundColor Green
+} else {
+    Write-Host "[OK] La ruta de scripts ya se encuentra en el PATH." -ForegroundColor Green
+}
+
+# Actualizar variable PATH en el proceso actual
+if ($env:PATH -notlike ("*" + $scriptsPath + "*")) {
+    $env:PATH = $scriptsPath + ";" + $env:PATH
+}
+
+Write-Host ""
+# 4. Verificar si el comando jarvis esta disponible
 $jarvisCmd = Get-Command jarvis -ErrorAction SilentlyContinue
 if ($jarvisCmd) {
     Write-Host "===================================================" -ForegroundColor Green
     Write-Host "  Instalacion completada con exito!" -ForegroundColor Green
     Write-Host "===================================================" -ForegroundColor Green
+    Write-Host "El comando 'jarvis' quedo configurado permanentemente en tu sistema."
     Write-Host "Puedes ejecutar Jarvis desde cualquier terminal escribiendo:"
     Write-Host ""
     Write-Host "   jarvis" -ForegroundColor Yellow
     Write-Host ""
 } else {
-    Write-Host "[ADVERTENCIA] El comando 'jarvis' se instalo pero la carpeta 'Scripts'" -ForegroundColor Yellow
-    Write-Host "de Python no parece estar en tu variable PATH de esta sesion." -ForegroundColor Yellow
+    Write-Host "[ADVERTENCIA] No se pudo verificar 'jarvis' en el PATH inmediato." -ForegroundColor Yellow
+    Write-Host "Puedes ejecutarlo directamente desde la carpeta del proyecto con:" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "Puedes reiniciar tu terminal o ejecutarlo temporalmente con:"
-    Write-Host ""
+    Write-Host "   jarvis" -ForegroundColor Cyan
     Write-Host "   python -m main" -ForegroundColor Cyan
     Write-Host ""
 }

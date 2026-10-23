@@ -25,6 +25,26 @@ class TestCLI(unittest.TestCase):
         self.assertIn("Espacio", output)
         self.assertIn("CONFIGURADA", output)
 
+    def test_banner_unconfigured_state(self):
+        buf = io.StringIO()
+        cwd = Path("D:/Harness Jarvis")
+        with patch("sys.stdout", buf):
+            print_banner(None, None, cwd, has_key=False)
+        output = buf.getvalue()
+        self.assertIn("[SIN CONFIGURAR]", output)
+        self.assertIn("Pendiente", output)
+
+    def test_unconfigured_prompt_shows_guidance(self):
+        buf = io.StringIO()
+        with patch("main.load_model_memory", return_value={"active_provider": None, "active_model": None}):
+            with patch("builtins.input", side_effect=["hola", "exit"]):
+                with patch("sys.stdout", buf):
+                    ret = main([])
+        self.assertEqual(ret, 0)
+        output = buf.getvalue()
+        self.assertIn("[SIN CONFIGURAR]", output)
+        self.assertIn("No tienes ningún proveedor ni modelo configurado todavía", output)
+
     def test_handle_slash_command_cwd(self):
         buf = io.StringIO()
         cwd = Path("D:/Harness Jarvis")
