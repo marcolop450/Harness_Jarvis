@@ -156,6 +156,21 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(ret, 0)
         self.assertTrue(any("⚡ groq:llama-3.3" in p for p in prompts_seen))
 
+    def test_handle_slash_command_guide_and_help(self):
+        for cmd in ("/guide", "/guia", "/help", "/ayuda"):
+            buf = io.StringIO()
+            cwd = Path("D:/Harness Jarvis")
+            with patch("sys.stdout", buf):
+                p, m, handled = handle_slash_command(cmd, None, None, cwd)
+            self.assertTrue(handled)
+            self.assertIsNone(p)
+            self.assertIsNone(m)
+            out = buf.getvalue()
+            self.assertIn("GUIA RAPIDA DE INICIO", out)
+            self.assertIn("/key", out)
+            self.assertIn("/model", out)
+            self.assertIn("Ollama", out)
+
     def test_repl_graceful_exit_without_api_keys(self):
         buf = io.StringIO()
         with patch("builtins.input", side_effect=["exit"]):

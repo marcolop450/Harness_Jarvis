@@ -60,6 +60,57 @@ def get_prompt_symbol() -> str:
         return "*"
 
 
+def print_user_guide() -> None:
+    """Imprime una guía visual completa para nuevos usuarios (operativa sin conexión ni IA)."""
+    guide = """
++------------------------------------------------------------------------+
+|             GUIA RAPIDA DE INICIO - HARNESS JARVIS CLI                 |
++------------------------------------------------------------------------+
+  ¡Bienvenido! Jarvis es tu agente CLI de programacion autonomo.
+  Opera en el directorio donde abras la terminal y puede crear archivos,
+  editar codigo y ejecutar comandos bajo tu supervision.
+
+1. CONFIGURAR PROVEEDOR Y CLAVE DE API (Primer uso):
+   - Con API Key (Groq gratuito, Gemini, OpenAI, OpenRouter):
+     /key groq <tu_api_key_gsk>
+     /key gemini <tu_api_key_ai>
+     (Tu clave se inyecta en memoria y se guarda en tu .env local).
+
+   - O 100% Local y Gratuito sin Internet (con Ollama):
+     Descarga Ollama (https://ollama.com) y ejecuta: ollama pull qwen2.5-coder:7b
+     Luego en Jarvis:
+     /model add ollama qwen2.5-coder:7b
+
+2. ADMINISTRAR TUS MODELOS:
+   - Ver tu catalogo numerado:   /model
+   - Agregar un modelo propio:   /model add <proveedor> <modelo>
+                                 (ej. /model add groq qwen/qwen3.8-27b)
+   - Cambiar de modelo activo:   /model <numero> (ej. /model 1)
+   - Eliminar un modelo:         /model rm <numero> (ej. /model 2)
+
+3. COMO PEDIRLE TAREAS AL AGENTE:
+   - Solo escribe lo que necesitas en lenguaje natural:
+     * "Crea un script python test.py que calcule factoriales"
+     * "Explica el contenido de main.py"
+     * "Busca en el proyecto donde se define la funcion X"
+
+4. SEGURIDAD Y CONFIRMACION [s/n]:
+   - Para proteger tu entorno, antes de crear/editar archivos o correr
+     comandos, Jarvis se detendra y te pedira autorizacion interactiva:
+     ¿Desea autorizar esta operacion? [s/n]: s
+   - Escribe 's', 'si', 'sí', 'ss' o 'yes' para autorizar, o 'n' para cancelar.
+
+5. COMANDOS UTILES DE SESION:
+   - /guide o /help  : Vuelve a mostrar esta guia en cualquier momento.
+   - /clear          : Limpia la pantalla de la terminal.
+   - /reset          : Reinicia la memoria de chat de la carpeta de trabajo.
+   - /cwd            : Muestra la carpeta de trabajo actual.
+   - exit o quit     : Cierra la sesion de Jarvis de forma ordenada.
++------------------------------------------------------------------------+
+"""
+    print(guide.strip())
+
+
 def print_banner(
     provider_name: str | None,
     model_name: str | None,
@@ -70,7 +121,7 @@ def print_banner(
     if not provider_name or not model_name:
         prov_str = "[SIN CONFIGURAR]"
         model_str = "[SIN CONFIGURAR]"
-        status_str = "Pendiente (Usa /key o /model para empezar)"
+        status_str = "Pendiente (Usa /key o /guide para empezar)"
     else:
         prov_str = provider_name.upper()
         model_str = model_name
@@ -84,7 +135,7 @@ def print_banner(
   Modelo    : {model_str}
   Estado API: {status_str}
   Limite    : MAX_STEPS={MAX_STEPS} por consulta
-  Comandos  : /model  |  /key <prov> <clave>  |  /clear  |  /reset  |  exit
+  Comandos  : /model  |  /key <prov> <clave>  |  /guide  |  /clear  |  /reset  |  exit
 ==============================================================
 """
     print(banner.strip())
@@ -141,6 +192,10 @@ def handle_slash_command(
 
     if cmd in ("/cwd", "/workspace"):
         print(f"\n[+] Directorio de trabajo activo: {cwd}")
+        return current_provider, current_model, True
+
+    if cmd in ("/guide", "/guia", "/help", "/ayuda"):
+        print_user_guide()
         return current_provider, current_model, True
 
     if cmd == "/clear":
@@ -370,9 +425,10 @@ def run_repl(
         if not active_provider or not active_model:
             print(
                 "\n[Aviso]: No tienes ningún proveedor ni modelo configurado todavía.\n"
-                "  - Si tienes una clave API:  /key <proveedor> <tu_clave>\n"
-                "  - O agrega tu modelo con:   /model add <proveedor> <nombre_modelo>\n"
-                "  - O si usas Ollama local:   /model add ollama qwen2.5-coder:7b"
+                "  - Consulta la guía de inicio con: /guide\n"
+                "  - Si tienes una clave API:        /key <proveedor> <tu_clave>\n"
+                "  - O agrega tu modelo con:         /model add <proveedor> <nombre_modelo>\n"
+                "  - O si usas Ollama local:         /model add ollama qwen2.5-coder:7b"
             )
             continue
 

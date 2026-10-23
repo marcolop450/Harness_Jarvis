@@ -37,7 +37,7 @@ El sistema SHALL recibir la consulta del usuario, transferirla al bucle del agen
 - **THEN** el sistema envía la instrucción al bucle del agente y muestra la respuesta en pantalla
 
 ### Requirement: Comandos de control de sesión y contexto
-La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /clear y /reset, mostrar el directorio de trabajo activo (cwd) y el modelo activo en un prompt dinámico, y reflejar cambios de configuración inmediatamente en pantalla y en memoria.
+La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /clear, /reset y comandos de ayuda/guía (/guide, /guia, /help), mostrar el directorio de trabajo activo (cwd) y el modelo activo en un prompt dinámico, y operar de manera resiliente incluso sin claves de API ni modelos de IA configurados.
 
 #### Scenario: Visualización del directorio de trabajo en consola
 - **GIVEN** la inicialización de la terminal del agente
@@ -68,3 +68,8 @@ La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /cl
 - **GIVEN** una sesión activa con un directorio de trabajo y modelo seleccionados
 - **WHEN** la terminal solicita la entrada del usuario
 - **THEN** el texto del prompt muestra de forma compacta el nombre del directorio y el modelo activo (ejemplo: '[Pruebas | ⚡ groq:llama-3.3-70b-versatile] jarvis> ')
+
+#### Scenario: Ejecución de guía predeterminada interactiva para nuevos usuarios
+- **GIVEN** cualquier sesión de la CLI, incluso sin claves de API ni modelos configurados
+- **WHEN** el usuario ejecuta el comando '/guide', '/guia' o '/help'
+- **THEN** el sistema imprime una guía visual estructurada y completa explicando cómo configurar proveedores, cómo gestionar modelos y cómo dar instrucciones al agente de forma autónoma sin realizar llamadas a la red

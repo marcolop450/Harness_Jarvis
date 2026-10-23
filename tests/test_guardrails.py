@@ -54,16 +54,30 @@ class TestGuardrailsPathSecurity(unittest.TestCase):
 
 class TestGuardrailsConfirmation(unittest.TestCase):
     def test_confirm_action_accepts(self):
-        for affirmative in ["s", "S", "si", "SI", "y", "Y", "yes", "YES"]:
+        affirmatives = [
+            "s", "S", "si", "SI", "sí", "SÍ", "ss", "SS", "y", "Y", "yes", "YES", "ok", "OK"
+        ]
+        for affirmative in affirmatives:
             with self.subTest(affirmative=affirmative):
                 result = confirm_action("Crear archivo", input_fn=lambda _: affirmative)
                 self.assertTrue(result)
 
     def test_confirm_action_rejects(self):
-        for negative in ["n", "N", "no", "NO", "cancel", ""]:
+        for negative in ["n", "N", "no", "NO", "cancel", "", "denegar"]:
             with self.subTest(negative=negative):
                 result = confirm_action("Ejecutar comando", input_fn=lambda _: negative)
                 self.assertFalse(result)
+
+    def test_confirm_action_prints_details_and_flushes(self):
+        import io
+        from unittest.mock import patch
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            confirm_action("Eliminar archivo", details="archivo.txt", input_fn=lambda _: "s")
+        output = buf.getvalue()
+        self.assertIn("[CONFIRMACION REQUERIDA]", output)
+        self.assertIn("Eliminar archivo", output)
+        self.assertIn("archivo.txt", output)
 
 
 if __name__ == "__main__":

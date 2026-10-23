@@ -8,6 +8,7 @@ Implementa:
 
 from __future__ import annotations
 import fnmatch
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -95,19 +96,29 @@ def confirm_action(
 ) -> bool:
     """Solicita confirmación interactiva obligatoria [s/n] al usuario.
 
-    Retorna True si el usuario acepta ('s', 'si', 'y', 'yes').
+    Retorna True si el usuario acepta ('s', 'si', 'sí', 'ss', 'y', 'yes', etc.).
     Retorna False si el usuario rechaza.
     """
     prompter = input_fn or input
 
-    prompt_msg = f"\n⚠️  [CONFIRMACIÓN REQUERIDA] ⚠️\nAcción: {action_description}\n"
+    # Volcado explícito e inmediato en pantalla previo a la espera de entrada
+    print("\n+--------------------------------------------------------+", flush=True)
+    print(f"| [CONFIRMACION REQUERIDA]", flush=True)
+    print(f"| Accion: {action_description}", flush=True)
     if details:
-        prompt_msg += f"Detalles: {details}\n"
-    prompt_msg += "¿Desea autorizar esta operación? [s/n]: "
+        print(f"| Detalles: {details}", flush=True)
+    print("+--------------------------------------------------------+", flush=True)
+    sys.stdout.flush()
 
     try:
-        answer = prompter(prompt_msg).strip().lower()
+        answer = prompter("¿Desea autorizar esta operacion? [s/n]: ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         return False
 
-    return answer in ("s", "si", "y", "yes")
+    if not answer:
+        return False
+
+    valid_affirmatives = (
+        "s", "si", "sí", "ss", "sii", "y", "yes", "ye", "ok", "true", "1"
+    )
+    return answer in valid_affirmatives or answer.startswith("s") or answer.startswith("y")
