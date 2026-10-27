@@ -9,7 +9,7 @@
 - [x] 3.1 Añadir política Git de solo lectura del repositorio activo; verificar rechazo de repositorio ajeno y consultas reales de estado e historial.
 
 ## 4. Filesystem
-- [ ] 4.1 Añadir políticas de rutas, secretos, búsqueda/listado y confirmaciones; verificar lecturas reales, escritura aprobada y rechazada y enlaces externos.
+- [x] 4.1 Añadir políticas de rutas, secretos, búsqueda/listado y confirmaciones; verificar lecturas reales, escritura aprobada y rechazada y enlaces externos.
 
 ## 5. CLI y migración
 - [ ] 5.1 Conectar gestor a REPL y -p, /mcp y reconexión; verificar fallos, cierre y trazabilidad con pruebas de CLI.

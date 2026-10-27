@@ -7,10 +7,11 @@ import subprocess
 from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Callable
-from harness.guardrails import SecurityViolationError, is_sensitive_path, validate_safe_path
+from harness.guardrails import SecurityViolationError, confirm_action, is_sensitive_path, validate_safe_path
 
 ALLOWED_TOOLS = {"fetch": {"fetch"}, "git": {
-    "git_status", "git_log", "git_diff_unstaged", "git_diff_staged"}}
+    "git_status", "git_log", "git_diff_unstaged", "git_diff_staged"},
+    "filesystem": {"read_text_file", "read_multiple_files", "list_directory", "search_files", "write_file", "edit_file"}}
 PROTECTED_PARTS = {".git", ".venv", "node_modules", ".harness_sessions", ".mcp-logs"}
 
 
@@ -46,6 +47,24 @@ def prepare_git(name: str, args: dict[str, Any], workspace: Path) -> dict[str, A
             if path:
                 safe_workspace_path(path, workspace)
         args["context_lines"] = max(0, min(int(args.get("context_lines", 3)), 20))
+    return args
+
+
+def prepare_filesystem(name: str, args: dict[str, Any], workspace: Path, confirm_fn) -> dict[str, Any]:
+    if name == "read_multiple_files":
+        args["paths"] = [str(safe_workspace_path(p, workspace)) for p in args["paths"]]
+    else:
+        args["path"] = str(safe_workspace_path(args["path"], workspace))
+    if name == "search_files":
+        exclusions = [f"**/{part}/**" for part in PROTECTED_PARTS]
+        exclusions += ["**/.env*", "**/*.key", "**/*.pem", "**/credentials*", "**/mcp.json", "**/.harness_*"]
+        args["excludePatterns"] = list(args.get("excludePatterns", [])) + exclusions
+    if name in ("write_file", "edit_file"):
+        confirmer = confirm_fn or confirm_action
+        if not confirmer(f"MCP Filesystem: {name}", f"Ruta: {args['path']}"):
+            raise PermissionError("Acción cancelada: el usuario denegó la escritura MCP.")
+        # Volver a validar tras la espera de entrada humana.
+        safe_workspace_path(args["path"], workspace)
     return args
 
 
@@ -86,9 +105,27 @@ def prepare_call(server: str, name: str, arguments: dict[str, Any], workspace: P
         args["max_length"] = min(int(args.get("max_length", 3500)), 3500)
     elif server == "git":
         args = prepare_git(name, args, workspace)
+    elif server == "filesystem":
+        args = prepare_filesystem(name, args, workspace, confirm_fn)
     return args
 
 
 def filter_result(server: str, name: str, text: str, arguments: dict[str, Any],
                   workspace: Path) -> str:
+    if server == "filesystem" and name in ("list_directory", "search_files"):
+        lines = []
+        for line in text.splitlines():
+            entry = line
+            if name == "list_directory":
+                if not line.startswith(("[FILE] ", "[DIR] ")):
+                    continue
+                entry = str(Path(arguments["path"]) / line.split(" ", 1)[1])
+            elif not Path(entry).is_absolute():
+                continue
+            try:
+                safe_workspace_path(entry, workspace)
+            except (ValueError, PermissionError, OSError):
+                continue
+            lines.append(line)
+        return "\n".join(lines) or "Sin resultados visibles permitidos."
     return text
