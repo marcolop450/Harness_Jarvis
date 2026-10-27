@@ -3,12 +3,14 @@ schema: spec-driven
 # Project context
 context: |
   Proyecto: Agente CLI en terminal (estilo Claude Code) con arquitectura de Harness Multi-API.
-  Fórmula arquitectónica: Harness = Modelo (Adaptador Multi-API) + Reglas (System Prompt y Guardrails) + Contexto (Árbol de carpetas y AGENT.md) + Herramientas (6 tools con JSON Schema).
-  Separación modular estricta en 4 módulos bajo `harness/`:
-    - `llm_provider.py`: Único punto de conexión con APIs externas.
+  Fórmula arquitectónica: Harness = Modelo (Adaptador Multi-API) + Reglas (System Prompt y Guardrails) + Contexto (Árbol de carpetas y AGENT.md) + Herramientas (catálogo nativo y MCP con JSON Schema).
+  Separación modular por responsabilidad bajo `harness/`:
+    - `llm_provider.py`: Único punto de conexión con APIs externas de modelos de lenguaje.
     - `agent_loop.py`: Ciclo de ejecución while con MAX_STEPS=15.
-    - `tools.py`: 6 herramientas con salidas truncadas a 4000 caracteres.
+    - `tools.py`: Herramientas nativas con salidas truncadas a 4000 caracteres, incluido el aviso.
     - `guardrails.py`: Bloqueo de archivos .env, validación de rutas dentro del cwd y confirmación [s/n] interactiva antes de editar archivos o correr comandos.
+    - `mcp_client.py`: Cliente y ciclo de vida de servidores externos por stdio.
+    - `mcp_policy.py`: Validación local de herramientas y argumentos MCP.
   Todos los artefactos, especificaciones y documentación deben redactarse en español.
 
 # Per-artifact rules
