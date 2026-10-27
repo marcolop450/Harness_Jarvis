@@ -2,8 +2,29 @@
   "mcpServers": {
     "fetch": {
       "command": "${python}",
-      "args": ["-m", "mcp_server_fetch"],
-      "allowed_tools": ["fetch"],
+      "args": [
+        "-m",
+        "mcp_server_fetch"
+      ],
+      "allowed_tools": [
+        "fetch"
+      ],
+      "timeout_seconds": 30
+    },
+    "git": {
+      "command": "${python}",
+      "args": [
+        "-m",
+        "mcp_server_git",
+        "--repository",
+        "${workspace}"
+      ],
+      "allowed_tools": [
+        "git_status",
+        "git_log",
+        "git_diff_unstaged",
+        "git_diff_staged"
+      ],
       "timeout_seconds": 30
     }
   }

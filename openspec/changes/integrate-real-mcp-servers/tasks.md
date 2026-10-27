@@ -6,7 +6,7 @@
 - [x] 2.1 Implementar gestor MCP, configuración, paginación, ciclo de vida y Fetch público; verificar pruebas unitarias y llamada Fetch real.
 
 ## 3. Git
-- [ ] 3.1 Añadir política Git de solo lectura del repositorio activo; verificar rechazo de repositorio ajeno y consultas reales de estado e historial.
+- [x] 3.1 Añadir política Git de solo lectura del repositorio activo; verificar rechazo de repositorio ajeno y consultas reales de estado e historial.
 
 ## 4. Filesystem
 - [ ] 4.1 Añadir políticas de rutas, secretos, búsqueda/listado y confirmaciones; verificar lecturas reales, escritura aprobada y rechazada y enlaces externos.

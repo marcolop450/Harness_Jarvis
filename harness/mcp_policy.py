@@ -3,11 +3,50 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import subprocess
 from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Callable
+from harness.guardrails import SecurityViolationError, is_sensitive_path, validate_safe_path
 
-ALLOWED_TOOLS = {"fetch": {"fetch"}}
+ALLOWED_TOOLS = {"fetch": {"fetch"}, "git": {
+    "git_status", "git_log", "git_diff_unstaged", "git_diff_staged"}}
+PROTECTED_PARTS = {".git", ".venv", "node_modules", ".harness_sessions", ".mcp-logs"}
+
+
+def safe_workspace_path(value: str, workspace: Path) -> Path:
+    raw = Path(value)
+    raw = raw if raw.is_absolute() else workspace / raw
+    # Comprobar tanto el nombre original como el destino resuelto de un enlace.
+    for candidate in (raw, raw.resolve()):
+        try:
+            parts = candidate.relative_to(workspace).parts
+        except ValueError:
+            raise SecurityViolationError("Ruta fuera del espacio de trabajo.")
+        if any(p.lower() in PROTECTED_PARTS or p.lower() == "mcp.json" or is_sensitive_path(Path(p)) for p in parts):
+            raise SecurityViolationError("Ruta confidencial o configuración protegida.")
+        if any(":" in p for p in parts):
+            raise SecurityViolationError("No se permiten flujos alternativos de archivos.")
+    return validate_safe_path(value, workspace)
+
+
+def prepare_git(name: str, args: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    repo = Path(args.get("repo_path", str(workspace))).resolve()
+    if repo != workspace or not (workspace / ".git").exists():
+        raise SecurityViolationError("Git solo permite el repositorio del espacio de trabajo activo.")
+    args["repo_path"] = str(workspace)
+    if name == "git_log":
+        args["max_count"] = max(1, min(int(args.get("max_count", 5)), 20))
+    if name.startswith("git_diff_"):
+        command = ["git", "diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv"]
+        if name == "git_diff_staged":
+            command.append("--cached")
+        changed = subprocess.run(command, cwd=workspace, capture_output=True, timeout=5, check=True)
+        for path in changed.stdout.decode("utf-8").split("\0"):
+            if path:
+                safe_workspace_path(path, workspace)
+        args["context_lines"] = max(0, min(int(args.get("context_lines", 3)), 20))
+    return args
 
 
 def public_url_syntax(url: str) -> str:
@@ -45,6 +84,8 @@ def prepare_call(server: str, name: str, arguments: dict[str, Any], workspace: P
     if server == "fetch":
         public_url_syntax(args.get("url", ""))
         args["max_length"] = min(int(args.get("max_length", 3500)), 3500)
+    elif server == "git":
+        args = prepare_git(name, args, workspace)
     return args
 
 
