@@ -16,5 +16,5 @@
 - [x] 5.2 Retirar falsos MCP y conservar SQLite nativo seguro; probar confirmaciones, escapes SQL, truncado y regresión completa.
 
 ## 6. Verificación y entrega
-- [ ] 6.1 Ejecutar integración de los tres servidores y demostración Ollama con llamadas verificadas, registrar evidencia y cierre de procesos.
-- [ ] 6.2 Actualizar documentación y reglas, validar artefactos y pruebas finales, sincronizar especificaciones y archivar; verificar commits con identidad existente y sin push.
+- [x] 6.1 Ejecutar integración de los tres servidores y demostración Ollama con llamadas verificadas, registrar evidencia y cierre de procesos.
+- [x] 6.2 Actualizar documentación y reglas, validar artefactos y pruebas finales, sincronizar especificaciones y archivar; verificar commits con identidad existente y sin push.

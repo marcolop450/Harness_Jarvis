@@ -32,7 +32,8 @@ def safe_workspace_path(value: str, workspace: Path) -> Path:
 
 
 def prepare_git(name: str, args: dict[str, Any], workspace: Path) -> dict[str, Any]:
-    repo = Path(args.get("repo_path", str(workspace))).resolve()
+    repo = Path(args.get("repo_path", str(workspace)))
+    repo = (repo if repo.is_absolute() else workspace / repo).resolve()
     if repo != workspace or not (workspace / ".git").exists():
         raise SecurityViolationError("Git solo permite el repositorio del espacio de trabajo activo.")
     args["repo_path"] = str(workspace)

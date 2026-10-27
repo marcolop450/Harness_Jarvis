@@ -23,6 +23,7 @@ class GitPolicyTests(unittest.TestCase):
     def test_log_is_bounded_and_root_is_fixed(self):
         result = prepare_call("git", "git_log", {"max_count": 100}, self.base)
         self.assertEqual(result, {"max_count": 20, "repo_path": str(self.base)})
+        self.assertEqual(prepare_call("git", "git_status", {"repo_path": "."}, self.base)["repo_path"], str(self.base))
 
     def test_diff_never_sends_secret_content(self):
         for path in (b".env\0", b"sub/credentials.json\0", b".harness_session.json\0"):

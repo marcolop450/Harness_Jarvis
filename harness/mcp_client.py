@@ -223,10 +223,12 @@ class Connection:
         if not self.thread.is_alive():
             return
         try:
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, None)
+            if self.loop is not None and self.queue is not None:
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, None)
             self.thread.join(timeout=1)
             if self.thread.is_alive():
-                self.loop.call_soon_threadsafe(self.task.cancel)
+                if self.loop is not None and self.task is not None:
+                    self.loop.call_soon_threadsafe(self.task.cancel)
                 self.thread.join(timeout=10)
         except RuntimeError:
             pass  # El loop acaba de cerrarse.

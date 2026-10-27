@@ -1,15 +1,15 @@
 ---
 name: harness-tool-builder
-description: Instrucciones para definir y registrar las 6 herramientas del agente en harness/tools.py con JSON Schema estricto, clasificación de riesgo (AUTO vs CONFIRM), manejo resiliente de errores y truncado a 4000 caracteres.
+description: Instrucciones para definir y registrar las herramientas nativas del agente en harness/tools.py con JSON Schema estricto, clasificación de riesgo (AUTO vs CONFIRM), manejo resiliente de errores y truncado a 4000 caracteres.
 ---
 
 # Harness Tool Builder Skill
 
 Esta habilidad guía la creación, tipado, validación y ejecución de las herramientas en [harness/tools.py](file:///d:/Harness%20Jarvis/harness/tools.py).
 
-## Catálogo Obligatorio de las 6 Herramientas
+## Catálogo nativo y extensión MCP
 
-El sistema debe proveer exactamente estas 6 herramientas estructuradas:
+El sistema debe proveer estas herramientas estructuradas y sqlite_query como séptima herramienta nativa:
 
 1. **`read_file`**: Lectura del contenido de archivos con soporte opcional para rangos de líneas o paginación.
 2. **`write_file`**: Creación o sobreescritura completa de archivos.
@@ -19,6 +19,8 @@ El sistema debe proveer exactamente estas 6 herramientas estructuradas:
 6. **`search_code`**: Búsqueda textual o regex dentro de archivos del repositorio.
 
 ---
+
+Las herramientas MCP se descubren en `mcp_client.py` y se autorizan en `mcp_policy.py`; no añadir conectores locales con nombres MCP. SQLite requiere confirmación para escritura.
 
 ## 1. Esquema JSON Schema Estricto
 
@@ -74,7 +76,7 @@ Cada herramienta debe estar categorizada con un nivel de riesgo:
 Para evitar saturar la ventana de contexto y desperdiciar tokens:
 - Toda salida generada por una herramienta debe pasar por una función de truncado con un límite estricto de **4000 caracteres**.
 - Si la salida excede 4000 caracteres:
-  - Cortar el texto en el carácter 4000 (o en el límite de línea anterior más cercano).
+  - Reservar espacio para el aviso y recortar el contenido de modo que el total no exceda 4000 caracteres.
   - Anexar un pie informativo explicativo:
     ```text
     \n[... Salida truncada: Se superó el límite de 4000 caracteres. Refina tu búsqueda o usa rangos de líneas ...]

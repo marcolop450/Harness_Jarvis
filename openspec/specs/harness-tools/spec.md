@@ -6,20 +6,25 @@ Define y expone las 6 herramientas operativas del agente (read_file, write_file,
 ## Requirements
 
 ### Requirement: Definición estricta y catálogo de herramientas
-El módulo tools SHALL exponer exactamente 6 herramientas compatibles con la especificación JSON Schema de OpenAI, categorizadas en niveles de riesgo AUTO y CONFIRM.
+El módulo tools SHALL exponer las seis herramientas operativas y sqlite_query como herramientas nativas; el catálogo efectivo añade herramientas MCP descubiertas con nombres sin colisiones.
 
 #### Scenario: Consulta del catálogo de herramientas
-- **GIVEN** el módulo de herramientas inicializado
-- **WHEN** se solicita la lista de especificaciones de herramientas para el LLM
-- **THEN** retorna las 6 herramientas con esquemas válidos que detallan nombres, tipos y parámetros requeridos
+- **GIVEN** herramientas nativas y servidores disponibles
+- **WHEN** se solicita el catálogo
+- **THEN** retorna esquemas JSON válidos y nombres mcp_<servidor>__<herramienta> exclusivamente para llamadas MCP
+
+#### Scenario: Migración de nombres
+- **GIVEN** sesión guardada con nombres antiguos
+- **WHEN** se reanuda
+- **THEN** se conserva el historial y las nuevas llamadas usan nombres actuales, sin reejecutar herramientas históricas
 
 ### Requirement: Truncado preventivo a 4000 caracteres
-Toda salida generada por cualquiera de las herramientas SHALL ser acotada a un máximo estricto de 4000 caracteres para preservar la ventana de contexto.
+Toda salida de herramienta SHALL tener como máximo 4000 caracteres incluyendo el pie informativo.
 
 #### Scenario: Salida voluminosa de comando o lectura
-- **GIVEN** un archivo o comando cuya salida excede los 4000 caracteres
-- **WHEN** se ejecuta la herramienta correspondiente
-- **THEN** la salida se trunca a 4000 caracteres y se anexa un pie informativo indicando el recorte
+- **GIVEN** salida mayor de 4000 caracteres
+- **WHEN** se entrega al modelo
+- **THEN** se recorta e incluye aviso sin exceder 4000
 
 ### Requirement: Resiliencia ante excepciones operativas
 Las funciones de ejecución de herramientas SHALL capturar cualquier excepción del sistema operativo o parámetros erróneos y retornar un mensaje explicativo en texto.
@@ -30,14 +35,14 @@ Las funciones de ejecución de herramientas SHALL capturar cualquier excepción 
 - **THEN** la herramienta retorna un mensaje de error descriptivo sin propagar excepciones que interrumpan el agente
 
 ### Requirement: Integración de herramientas compatibles con Model Context Protocol (MCP)
-El sistema SHALL soportar e integrar un mínimo de 3 herramientas o clientes bajo el estándar Model Context Protocol (MCP), permitiendo extender las capacidades del arnés hacia servicios contextuales externos y almacenamiento estructurado.
+El sistema SHALL integrar tres servidores MCP reales: Fetch, Git y Filesystem. Las funciones locales no cuentan como servidores MCP.
 
 #### Scenario: Invocación de herramienta MCP de consulta contextual
-- **GIVEN** una herramienta MCP habilitada en el catálogo (e.g. inspección git, lectura web/http o consulta sqlite)
-- **WHEN** el modelo emite un tool_call compatible con la especificación MCP
-- **THEN** el despachador ejecuta la herramienta a través del cliente MCP y retorna la salida truncada a 4000 caracteres
+- **GIVEN** servidor habilitado
+- **WHEN** el modelo solicita una herramienta descubierta
+- **THEN** el cliente envía una llamada MCP real y devuelve salida acotada
 
 #### Scenario: Fallo o desconexión del servidor MCP
-- **GIVEN** un fallo de conexión o error en el servicio MCP consultado
-- **WHEN** la herramienta intenta procesar la petición
-- **THEN** retorna un mensaje de error resiliente en texto sin romper el bucle del agente
+- **GIVEN** conexión fallida
+- **WHEN** se solicita una herramienta MCP
+- **THEN** se informa el fallo sin romper el bucle ni usar un sustituto local
