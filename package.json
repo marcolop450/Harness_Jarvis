@@ -1,0 +1,10 @@
+{
+  "name": "harness-jarvis-mcp-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Servidores MCP y Node local para Jarvis",
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2.0.1",
+    "node": "24.15.0"
+  }
+}

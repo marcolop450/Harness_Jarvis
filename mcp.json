@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "${python}",
+      "args": ["-m", "mcp_server_fetch"],
+      "allowed_tools": ["fetch"],
+      "timeout_seconds": 30
+    }
+  }
+}

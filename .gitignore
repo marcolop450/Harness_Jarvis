@@ -44,3 +44,10 @@ tests/sandbox_tmp/
 .idea/
 *.swp
 *.swo
+
+# Dependencias MCP, sesiones y evidencia local
+node_modules/
+.harness_session.json
+.harness_sessions/
+.mcp-logs/
+.mcp-demo/

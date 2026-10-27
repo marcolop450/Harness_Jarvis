@@ -1,9 +1,9 @@
 ## 1. Especificación y dependencias
 - [x] 1.1 Validar propuesta, diseño y deltas; actualizar reglas obsoletas y comprobar openspec validate --strict.
-- [ ] 1.2 Instalar SDK y servidores fijados con Node local; verificar versiones, pip check y comandos de inicio sin descargas.
+- [x] 1.2 Instalar SDK y servidores fijados con Node local; verificar versiones, pip check y comandos de inicio sin descargas.
 
 ## 2. Cliente y Fetch
-- [ ] 2.1 Implementar gestor MCP, configuración, paginación, ciclo de vida y Fetch público; verificar pruebas unitarias y llamada Fetch real.
+- [x] 2.1 Implementar gestor MCP, configuración, paginación, ciclo de vida y Fetch público; verificar pruebas unitarias y llamada Fetch real.
 
 ## 3. Git
 - [ ] 3.1 Añadir política Git de solo lectura del repositorio activo; verificar rechazo de repositorio ajeno y consultas reales de estado e historial.
