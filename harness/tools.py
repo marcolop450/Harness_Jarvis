@@ -1,4 +1,4 @@
-"""Definición y ejecución de las 6 herramientas operativas del Agente Harness.
+"""Definición y ejecución de herramientas nativas del Agente Harness.
 
 Catálogo estricto:
 1. read_file (AUTO)
@@ -7,6 +7,7 @@ Catálogo estricto:
 4. list_dir (AUTO)
 5. run_command (CONFIRM)
 6. search_code (AUTO)
+7. sqlite_query (lectura AUTO; escritura CONFIRM)
 
 Todas las salidas están estrictamente truncadas a un máximo de 4000 caracteres.
 """
@@ -17,8 +18,6 @@ import os
 import re
 import sqlite3
 import subprocess
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 from harness.guardrails import SecurityViolationError, confirm_action, validate_safe_path
@@ -39,9 +38,7 @@ TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "write_file": RiskLevel.CONFIRM,
     "edit_file": RiskLevel.CONFIRM,
     "run_command": RiskLevel.CONFIRM,
-    "mcp_fetch": RiskLevel.AUTO,
-    "mcp_git_info": RiskLevel.AUTO,
-    "mcp_sqlite_query": RiskLevel.AUTO,
+    "sqlite_query": RiskLevel.CONFIRM,
 }
 
 
@@ -49,8 +46,8 @@ def truncate_output(text: str, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> str:
     """Trunca el texto si supera max_chars y anexa un pie informativo explicativo."""
     if len(text) <= max_chars:
         return text
-    notice = f"\n\n[... Salida truncada: Se superó el límite de {max_chars} caracteres. Acota tu consulta ...]"
-    return text[:max_chars] + notice
+    suffix = "\n[Salida truncada]"
+    return text[:max(0, max_chars - len(suffix))] + suffix[:max_chars]
 
 
 def tool_read_file(
@@ -276,111 +273,74 @@ def tool_search_code(
     return truncate_output("\n".join(matches))
 
 
-def tool_mcp_fetch(url: str, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> str:
-    """Consulta segura de endpoints HTTP o recursos web bajo el protocolo MCP."""
-    if not url.startswith(("http://", "https://")):
-        return "Error: Solo se admiten URLs que inicien con http:// o https://."
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Harness-Jarvis-MCP/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            status = response.status
-            content_type = response.headers.get_content_type()
-            raw_bytes = response.read(max_chars * 2)
-            charset = response.headers.get_content_charset() or "utf-8"
-            body = raw_bytes.decode(charset, errors="replace")
-            res_str = f"[MCP Fetch Status {status} | Tipo: {content_type}]\n\n{body}"
-            return truncate_output(res_str, max_chars)
-    except urllib.error.HTTPError as http_err:
-        return f"[MCP Fetch Error {http_err.code}]: {http_err.reason}"
-    except Exception as exc:
-        return f"[MCP Fetch Error]: {exc}"
-
-
-def tool_mcp_git_info(
-    subcommand: str = "status",
-    max_commits: int = 5,
-    base_dir: Path | None = None,
-) -> str:
-    """Inspector MCP para consultar el estado del repositorio Git del proyecto."""
-    cwd = (base_dir or Path.cwd()).resolve()
-    valid_subcommands = {
-        "status": ["git", "status", "-s"],
-        "log": ["git", "log", f"-n{max(1, min(max_commits, 20))}", "--oneline"],
-        "diff": ["git", "diff", "--stat"],
-        "branch": ["git", "branch", "--show-current"],
-    }
-    cmd_key = subcommand.strip().lower()
-    if cmd_key not in valid_subcommands:
-        return (
-            f"Error: Subcomando '{subcommand}' no soportado. "
-            f"Opciones disponibles: {', '.join(valid_subcommands.keys())}."
-        )
-
-    try:
-        res = subprocess.run(
-            valid_subcommands[cmd_key],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        if res.returncode != 0:
-            err_msg = res.stderr.strip() or f"Código de salida: {res.returncode}"
-            return f"[MCP Git Error]: {err_msg}"
-        out = res.stdout.strip()
-        if not out:
-            return f"[MCP Git {cmd_key}]: Sin cambios / salida limpia."
-        return truncate_output(f"[MCP Git {cmd_key}]:\n{out}")
-    except Exception as exc:
-        return f"[MCP Git Error]: {exc}"
-
-
-def tool_mcp_sqlite_query(
+def tool_sqlite_query(
     query: str,
     db_path: str = ":memory:",
     base_dir: Path | None = None,
+    confirm_fn: Callable[[str, str], bool] | None = None,
 ) -> str:
-    """Ejecutor MCP de consultas SQL sobre bases de datos SQLite locales o en memoria."""
-    clean_query = query.strip()
-    if not clean_query:
+    """SQLite nativo: autorizer de solo lectura y aprobación antes de mutar.
+
+    ATTACH, DETACH, PRAGMA y funciones de acceso externo están siempre bloqueados.
+    Una lectura de una base inexistente nunca crea un archivo.
+    """
+    query = query.strip()
+    if not query:
         return "Error: La consulta SQL no puede estar vacía."
+    path = None if db_path == ":memory:" else validate_safe_path(db_path, base_dir)
+    read_candidate = query.lower().startswith(("select", "with", "explain"))
+    forbidden = {sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_PRAGMA}
+    read_actions = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
 
-    if db_path != ":memory:":
-        safe_path = validate_safe_path(db_path, base_dir)
-        db_target = str(safe_path)
-    else:
-        db_target = ":memory:"
-
-    try:
-        conn = sqlite3.connect(db_target)
+    def run(read_only):
+        rejected_write = False
+        rejected_external = False
+        def authorize(action, arg1, arg2, database, trigger):
+            nonlocal rejected_write, rejected_external
+            if action in forbidden or (action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() in
+                                       {"load_extension", "readfile", "writefile"}):
+                rejected_external = True
+                return sqlite3.SQLITE_DENY
+            if read_only and action not in read_actions:
+                rejected_write = True
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        target = ":memory:" if path is None else (path.as_uri() + "?mode=ro" if read_only else str(path))
+        conn = sqlite3.connect(target, uri=bool(read_only and path), timeout=5)
         try:
-            cursor = conn.cursor()
-            if clean_query.lower().startswith("select") or clean_query.lower().startswith("pragma"):
-                cursor.execute(clean_query)
-                rows = cursor.fetchall()
-                col_names = [d[0] for d in cursor.description] if cursor.description else []
-                header = " | ".join(col_names)
-                lines = [header, "-" * max(len(header), 10)]
-                for row in rows[:50]:
-                    lines.append(" | ".join(str(v) for v in row))
-                if len(rows) > 50:
-                    lines.append(f"... {len(rows) - 50} filas adicionales omitidas.")
-                output = "\n".join(lines) if rows else "Consulta ejecutada: 0 filas encontradas."
-            else:
-                cursor.executescript(clean_query)
+            conn.enable_load_extension(False)
+            conn.set_authorizer(authorize)
+            try:
+                cursor = conn.execute(query) if read_only else conn.executescript(query)
+                if cursor.description:
+                    rows = cursor.fetchmany(51)
+                    header = " | ".join(column[0] for column in cursor.description)
+                    lines = [header, "-" * min(len(header), 100)]
+                    lines.extend(" | ".join(str(value) for value in row) for row in rows[:50])
+                    if len(rows) > 50:
+                        lines.append("... filas adicionales omitidas.")
+                    return truncate_output("\n".join(lines))
                 conn.commit()
-                output = "Sentencia ejecutada con éxito."
+                return "Sentencia ejecutada con éxito."
+            except sqlite3.DatabaseError:
+                if rejected_external:
+                    return "[SQLite Error]: Operación SQL externa o PRAGMA bloqueada."
+                if rejected_write:
+                    return None  # Volver a solicitar autorización sin haber escrito.
+                raise
         finally:
             conn.close()
-        return truncate_output(output)
-    except SecurityViolationError as sec_err:
-        return f"Violación de seguridad: {sec_err}"
+    try:
+        if read_candidate:
+            result = run(True)
+            if result is not None:
+                return result
+        confirmer = confirm_fn or confirm_action
+        if not confirmer("Modificar base SQLite", f"Base: {db_path}\nSQL: {query[:500]}"):
+            return "Acción cancelada: el usuario denegó la escritura SQLite."
+        return run(False)
     except Exception as exc:
-        return f"[MCP SQLite Error]: {exc}"
+        return f"[SQLite Error]: {exc}"
 
 
 def execute_tool(
@@ -389,6 +349,10 @@ def execute_tool(
     base_dir: Path | None = None,
     confirm_fn: Callable[[str, str], bool] | None = None,
 ) -> str:
+    return truncate_output(_execute_tool(name, arguments, base_dir, confirm_fn))
+
+
+def _execute_tool(name, arguments, base_dir=None, confirm_fn=None) -> str:
     """Despacha de forma unificada la ejecución de cualquier herramienta con captura de excepciones."""
     if name not in TOOL_RISK_MAP:
         return (
@@ -438,21 +402,12 @@ def execute_tool(
                 path=args.get("path", "."),
                 base_dir=base_dir,
             )
-        elif name == "mcp_fetch":
-            return tool_mcp_fetch(
-                url=args.get("url", ""),
-            )
-        elif name == "mcp_git_info":
-            return tool_mcp_git_info(
-                subcommand=args.get("subcommand", "status"),
-                max_commits=int(args.get("max_commits", 5)),
-                base_dir=base_dir,
-            )
-        elif name == "mcp_sqlite_query":
-            return tool_mcp_sqlite_query(
+        elif name == "sqlite_query":
+            return tool_sqlite_query(
                 query=args.get("query", ""),
                 db_path=args.get("db_path", ":memory:"),
                 base_dir=base_dir,
+                confirm_fn=confirm_fn,
             )
         else:
             return f"Error: Herramienta '{name}' no implementada."
@@ -596,47 +551,8 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "mcp_fetch",
-            "description": "Cliente MCP para consultar recursos web o APIs externas mediante peticiones HTTP seguras.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL completa (http:// o https://) a consultar.",
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mcp_git_info",
-            "description": "Herramienta MCP para inspeccionar el estado, ramas, historial de commits o diffs del repositorio Git.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subcommand": {
-                        "type": "string",
-                        "description": "Subcomando a ejecutar: 'status', 'log', 'diff' o 'branch'.",
-                        "enum": ["status", "log", "diff", "branch"],
-                    },
-                    "max_commits": {
-                        "type": "integer",
-                        "description": "Número máximo de commits a mostrar al consultar 'log' (por defecto 5).",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mcp_sqlite_query",
-            "description": "Herramienta MCP para ejecutar consultas SQL sobre bases de datos locales SQLite o base en memoria.",
+            "name": "sqlite_query",
+            "description": "Herramienta nativa SQLite; requiere autorización para escrituras. Ejecuta consultas SQL sobre bases de datos locales SQLite o base en memoria.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -657,5 +573,5 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
 
 
 def get_tools_definitions() -> list[dict[str, Any]]:
-    """Retorna las 6 especificaciones de herramientas compatibles con OpenAI."""
+    """Retorna las siete herramientas nativas; MCP se descubre por conexión."""
     return list(TOOLS_DEFINITIONS)

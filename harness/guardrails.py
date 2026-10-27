@@ -25,6 +25,7 @@ SENSITIVE_PATTERNS: tuple[str, ...] = (
     ".git/config",
     ".harness_session.json",
     ".harness_models.json",
+    "mcp.json",
 )
 
 
@@ -42,6 +43,8 @@ def is_sensitive_path(path: Path) -> bool:
     """Determina si una ruta corresponde a un archivo protegido o confidencial."""
     filename = path.name.lower()
     path_str = path.as_posix().lower()
+    if any(part.lower() in (".git", ".harness_sessions", ".mcp-logs") for part in path.parts):
+        return True
 
     for pattern in SENSITIVE_PATTERNS:
         if fnmatch.fnmatch(filename, pattern):

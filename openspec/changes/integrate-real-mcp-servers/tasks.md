@@ -12,8 +12,8 @@
 - [x] 4.1 Añadir políticas de rutas, secretos, búsqueda/listado y confirmaciones; verificar lecturas reales, escritura aprobada y rechazada y enlaces externos.
 
 ## 5. CLI y migración
-- [ ] 5.1 Conectar gestor a REPL y -p, /mcp y reconexión; verificar fallos, cierre y trazabilidad con pruebas de CLI.
-- [ ] 5.2 Retirar falsos MCP y conservar SQLite nativo seguro; probar confirmaciones, escapes SQL, truncado y regresión completa.
+- [x] 5.1 Conectar gestor a REPL y -p, /mcp y reconexión; verificar fallos, cierre y trazabilidad con pruebas de CLI.
+- [x] 5.2 Retirar falsos MCP y conservar SQLite nativo seguro; probar confirmaciones, escapes SQL, truncado y regresión completa.
 
 ## 6. Verificación y entrega
 - [ ] 6.1 Ejecutar integración de los tres servidores y demostración Ollama con llamadas verificadas, registrar evidencia y cierre de procesos.

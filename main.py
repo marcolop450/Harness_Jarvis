@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 
 from harness.agent_loop import MAX_STEPS, compact_conversation_history, run_agent_loop
 from harness.guardrails import clear_turn_approvals
+from harness.mcp_client import MCPManager
+from harness.tools import execute_tool, get_tools_definitions
 from harness.llm_provider import SUPPORTED_PROVIDERS, format_clean_api_error, resolve_provider
 from harness.model_config import (
     add_user_model,
@@ -140,7 +142,7 @@ def print_banner(
   Modelo    : {model_str}
   Estado API: {status_str}
   Limite    : MAX_STEPS={MAX_STEPS} por consulta
-  Comandos  : /model | /key | /compact | /sessions | /resume | /guide | /clear | /reset | exit
+  Comandos  : /model | /key | /mcp | /compact | /sessions | /resume | /guide | /clear | /reset | exit
 ==============================================================
 """
     print(banner.strip())
@@ -186,6 +188,7 @@ def handle_slash_command(
     cwd: Path,
     conversation_history: list[dict[str, Any]] | None = None,
     session_state: dict[str, Any] | None = None,
+    mcp_manager: MCPManager | None = None,
 ) -> tuple[str | None, str | None, bool]:
     """Procesa comandos de barra oblicua (/model, /key, /cwd, /clear, /reset, /sessions, /resume).
 
@@ -195,6 +198,15 @@ def handle_slash_command(
     if not parts:
         return current_provider, current_model, False
     cmd = parts[0].lower()
+
+    if cmd == "/mcp":
+        if len(parts) > 2 or (len(parts) == 2 and parts[1] != "reconnect"):
+            print("Uso: /mcp o /mcp reconnect")
+        elif mcp_manager is None:
+            print("[MCP]: No hay gestor de conexiones activo.")
+        else:
+            print(mcp_manager.reconnect() if len(parts) == 2 else mcp_manager.report())
+        return current_provider, current_model, True
 
     if cmd in ("/cwd", "/workspace"):
         print(f"\n[+] Directorio de trabajo activo: {cwd}")
@@ -457,6 +469,30 @@ def run_repl(
     system_prompt: str = DEFAULT_BASE_PROMPT,
     cwd: Path | None = None,
 ) -> int:
+    with MCPManager(cwd, on_event=print_mcp_event) as manager:
+        return _run_repl(provider_name, model, system_prompt, cwd, manager)
+
+
+def print_mcp_event(server: str, tool: str, status: str) -> None:
+    print(f"[MCP {server}/{tool}] {status}", flush=True)
+
+
+def run_turn(manager: MCPManager, **kwargs):
+    """Mismo despacho en REPL y -p; las herramientas MCP nunca usan fallback."""
+    remote = manager.definitions()
+    if manager.config_error or any(c.status == "error" for c in manager.connections.values()):
+        print(manager.report(), file=sys.stderr)
+    native = get_tools_definitions()
+
+    def dispatch(name, arguments):
+        if name.startswith("mcp_"):
+            return manager.execute(name, arguments)
+        return execute_tool(name, arguments, base_dir=manager.workspace, confirm_fn=manager.confirm_fn)
+
+    return run_agent_loop(tools=native + remote, tool_executor=dispatch, **kwargs)
+
+
+def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
     """Inicia el bucle REPL interactivo con tolerancia a entorno sin API."""
     load_dotenv()
     working_dir = (cwd or Path.cwd()).resolve()
@@ -520,6 +556,7 @@ def run_repl(
                 working_dir,
                 conversation_history,
                 session_state=session_state,
+                mcp_manager=manager,
             )
             if handled:
                 continue
@@ -549,7 +586,7 @@ def run_repl(
         clear_turn_approvals()
 
         try:
-            reply, conversation_history = run_agent_loop(
+            reply, conversation_history = run_turn(manager,
                 prompt=user_input,
                 system_prompt=full_system_prompt,
                 messages=conversation_history,
@@ -595,12 +632,14 @@ def main(argv: list[str] | None = None) -> int:
             config = resolve_provider(target_provider)
             target_model = args.model or memory.get("active_model") or config.default_model
             full_system = build_workspace_system_prompt(args.system)
-            reply, _ = run_agent_loop(
-                prompt=args.prompt,
-                system_prompt=full_system,
-                provider_name=config.name,
-                model=target_model,
-            )
+            clear_turn_approvals()
+            with MCPManager(on_event=print_mcp_event) as manager:
+                reply, _ = run_turn(manager,
+                    prompt=args.prompt,
+                    system_prompt=full_system,
+                    provider_name=config.name,
+                    model=target_model,
+                )
             print(reply)
             return 0
         except Exception as exc:
