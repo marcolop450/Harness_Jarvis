@@ -566,6 +566,12 @@ def build_workspace_system_prompt(
             pass
 
     sections.append(f"\n--- Contexto de Ejecución ---\nDirectorio de trabajo actual (CWD): {cwd}")
+    sections.append(
+        "--- PRINCIPIO DE VERDAD FÁCTICA (ANTI-ALUCINACIÓN) ---\n"
+        "1. NUNCA asumas ni inventes que un archivo, carpeta o comando se completó con éxito a menos que la herramienta lo confirme explícitamente en su salida.\n"
+        "2. Si una herramienta devuelve 'Acción cancelada' o un error, NUNCA declares la tarea como completada. Informa honestamente al usuario que la acción no se ejecutó.\n"
+        "3. Si no tienes certeza de la estructura actual, usa 'list_dir' o 'read_file' antes de emitir conclusiones."
+    )
     return "\n\n".join(sections)
 
 

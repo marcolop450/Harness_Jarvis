@@ -100,6 +100,8 @@ def build_environment_context(base_dir: Path | None = None) -> str:
         "- Estructura del Proyecto:\n"
         f"{tree_str}"
         f"{rules_block}\n"
+        "- Regla Fáctica Obligatoria: Solo reporta como creados o modificados los archivos cuya herramienta "
+        "haya devuelto éxito en este turno. Si dudas de la existencia de un directorio, usa list_dir antes de responder.\n"
         "========================================="
     )
     return context
@@ -272,6 +274,15 @@ def run_agent_loop(
                             result_text = active_executor(tc.name, tc.arguments)
                     except Exception as exc:
                         result_text = f"Error al ejecutar herramienta '{tc.name}': {exc}"
+
+                    if "Acción cancelada" in result_text or "Operación cancelada" in result_text or "denegó" in result_text:
+                        grounded_warning = (
+                            "[ALERTA DE SEGURIDAD Y ESTADO REAL]: La operación fue cancelada o rechazada por el usuario. "
+                            "Los cambios NO fueron aplicados en el disco ni en la consola. "
+                            "Tienes estrictamente prohibido afirmar que este paso fue completado con éxito. "
+                            "Informa con honestidad al usuario que la acción no se ejecutó y espera sus instrucciones."
+                        )
+                        result_text = f"{grounded_warning}\n\n{result_text}"
 
                     history.append({
                         "role": "tool",

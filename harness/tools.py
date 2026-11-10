@@ -145,6 +145,8 @@ def tool_write_file(
     try:
         safe_path.parent.mkdir(parents=True, exist_ok=True)
         safe_path.write_text(content, encoding="utf-8")
+        if not safe_path.exists():
+            return f"Error fáctico: No se pudo verificar la creación de '{path}' en el disco."
         return f"Archivo '{path}' escrito exitosamente ({len(content)} caracteres)."
     except Exception as exc:
         return f"Error al escribir en '{path}': {exc}"

@@ -340,6 +340,32 @@ class TestKernelIntelligenceAndMemory(unittest.TestCase):
         finally:
             runtime.reset()
 
+    def test_cancelled_tool_action_injects_grounded_warning(self):
+        call_step = 0
+
+        def cancelling_caller(messages: list[dict[str, Any]], **kwargs) -> NormalizedResponse:
+            nonlocal call_step
+            call_step += 1
+            if call_step == 1:
+                tc = NormalizedToolCall(
+                    id="call_cancel_1",
+                    name="run_command",
+                    arguments={"command": "mkdir test"},
+                )
+                return NormalizedResponse(content="Ejecutando comando", tool_calls=[tc])
+            return NormalizedResponse(content="Entendido, no se realizaron cambios.", tool_calls=[])
+
+        reply, history = run_agent_loop(
+            prompt="Crea el directorio",
+            llm_caller=cancelling_caller,
+            tool_executor=lambda name, args: "Acción cancelada: El usuario denegó la ejecución del comando 'mkdir test'.",
+            system_prompt="Eres Jarvis",
+        )
+
+        tool_entry = next(m for m in history if m["role"] == "tool")
+        self.assertIn("ALERTA DE SEGURIDAD Y ESTADO REAL", tool_entry["content"])
+        self.assertIn("Los cambios NO fueron aplicados", tool_entry["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

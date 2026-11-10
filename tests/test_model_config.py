@@ -114,6 +114,7 @@ class TestModelConfig(unittest.TestCase):
         self.assertIn("Eres Jarvis.", prompt)
         self.assertIn("Regla 1: Usar siempre TypeScript.", prompt)
         self.assertIn(f"CWD): {self.base}", prompt)
+        self.assertIn("PRINCIPIO DE VERDAD FÁCTICA", prompt)
 
     def test_custom_provider_endpoints(self):
         import os

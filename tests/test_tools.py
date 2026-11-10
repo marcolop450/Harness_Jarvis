@@ -148,6 +148,18 @@ class TestModificationTools(unittest.TestCase):
         self.assertIn("cancelada", res)
         self.assertFalse((self.base / "cancelled.txt").exists())
 
+    def test_write_file_error_when_disk_write_fails(self):
+        from unittest.mock import patch
+        with patch.object(Path, "write_text", side_effect=OSError("Disk full")):
+            res = tool_write_file(
+                "failing.txt",
+                "Texto",
+                base_dir=self.base,
+                confirm_fn=lambda _d, _det: True,
+            )
+            self.assertIn("Error al escribir", res)
+            self.assertNotIn("exitosamente", res)
+
     def test_edit_file_confirmed(self):
         target_file = self.base / "to_edit.txt"
         target_file.write_text("Hello World\nGoodbye World", encoding="utf-8")
