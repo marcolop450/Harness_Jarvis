@@ -27,6 +27,7 @@ from harness.model_config import (
     build_workspace_system_prompt,
     clear_session_history,
     get_available_models_catalog,
+    get_provider_endpoints,
     list_saved_sessions,
     load_model_memory,
     load_session_by_id,
@@ -37,6 +38,7 @@ from harness.model_config import (
     save_model_selection,
     save_session_history,
     save_session_record,
+    set_provider_endpoint,
 )
 
 DEFAULT_BASE_PROMPT: str = (
@@ -142,7 +144,7 @@ def print_banner(
   Modelo    : {model_str}
   Estado API: {status_str}
   Limite    : MAX_STEPS={MAX_STEPS} por consulta
-  Comandos  : /model | /key | /mcp | /compact | /sessions | /resume | /guide | /clear | /reset | exit
+  Comandos  : /model | /endpoint | /key | /mcp | /compact | /sessions | /resume | /guide | /clear | /reset | exit
 ==============================================================
 """
     print(banner.strip())
@@ -352,21 +354,25 @@ def handle_slash_command(
                 print("+--------------------------------------------------------+")
             return current_provider, current_model, True
 
-        # Subcomando: /model add <prov> <modelo>
+        # Subcomando: /model add <prov> <modelo> [url]
         if parts[1].lower() == "add":
             if len(parts) < 4:
-                print("\n[Uso]: /model add <proveedor> <nombre_modelo>")
+                print("\n[Uso]: /model add <proveedor> <nombre_modelo> [endpoint_url]")
                 print(f"Proveedores soportados: {', '.join(SUPPORTED_PROVIDERS.keys())}")
+                print("  Ejemplo local (LM Studio): /model add ollama qwen/qwen3.5-9b http://localhost:1234/v1")
                 return current_provider, current_model, True
             prov = parts[2].lower()
             mod = parts[3]
+            endpoint_url = parts[4].strip() if len(parts) >= 5 else None
             if prov not in SUPPORTED_PROVIDERS:
                 print(f"\n[Error]: Proveedor '{prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
                 return current_provider, current_model, True
-            add_user_model(prov, mod, config_path, set_active=True)
+            add_user_model(prov, mod, config_path, set_active=True, endpoint_url=endpoint_url)
             print("\n+--------------------------------------------------------+")
             print(f"| [+] Modelo agregado y activado:                        |")
             print(f"|     {prov.upper()} -> {mod}".ljust(57) + "|")
+            if endpoint_url:
+                print(f"|     Endpoint: {endpoint_url}".ljust(57) + "|")
             print("+--------------------------------------------------------+")
             return prov, mod, True
 
@@ -428,6 +434,60 @@ def handle_slash_command(
 
         print("\nUso: /model  |  /model <numero>  |  /model add <prov> <mod>  |  /model rm <numero>")
         return current_provider, current_model, True
+
+    if cmd == "/endpoint":
+        config_path = cwd / ".harness_models.json"
+        endpoints = get_provider_endpoints(config_path)
+
+        # 1. /endpoint sin argumentos -> listar endpoints
+        if len(parts) == 1:
+            print("\n+------------------------------------------------------------------------+")
+            print("| DIRECCIONES Y ENDPOINTS DE PROVEEDORES                                 |")
+            print("+------------------------------------------------------------------------+")
+            for p, info in SUPPORTED_PROVIDERS.items():
+                active_url = os.getenv(f"{p.upper()}_BASE_URL") or endpoints.get(p) or info["base_url"]
+                is_custom = bool(endpoints.get(p) or os.getenv(f"{p.upper()}_BASE_URL"))
+                tag = "[Personalizado]" if is_custom else "[Por defecto]"
+                line = f"  {p.upper()}: {active_url} {tag}"
+                print(f"| {line}".ljust(73) + "|")
+            print("+------------------------------------------------------------------------+")
+            print("| Uso: /endpoint <proveedor> <url>                                       |")
+            print("|      Ejemplo: /endpoint ollama http://localhost:1234/v1                |")
+            print("+------------------------------------------------------------------------+")
+            return current_provider, current_model, True
+
+        # 2. /endpoint <proveedor> <url>
+        if len(parts) >= 3:
+            prov = parts[1].lower()
+            url = parts[2].strip()
+            if prov not in SUPPORTED_PROVIDERS:
+                print(f"\n[Error]: Proveedor '{prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
+                return current_provider, current_model, True
+            set_provider_endpoint(prov, url, config_path)
+            print("\n+--------------------------------------------------------+")
+            print(f"| [+] Endpoint actualizado para {prov.upper()}:".ljust(57) + "|")
+            print(f"|     {url}".ljust(57) + "|")
+            print("+--------------------------------------------------------+")
+            return current_provider, current_model, True
+
+        # 3. /endpoint <proveedor> (solicita interactivamente la dirección)
+        if len(parts) == 2:
+            prov = parts[1].lower()
+            if prov not in SUPPORTED_PROVIDERS:
+                print(f"\n[Error]: Proveedor '{prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
+                return current_provider, current_model, True
+            current_url = os.getenv(f"{prov.upper()}_BASE_URL") or endpoints.get(prov) or SUPPORTED_PROVIDERS[prov]["base_url"]
+            print(f"\nDirección actual para {prov.upper()}: {current_url}")
+            try:
+                new_url = input(f"Ingresa la nueva URL/endpoint para {prov.upper()} (Enter para mantener): ").strip()
+                if new_url:
+                    set_provider_endpoint(prov, new_url, config_path)
+                    print(f"\n[+] Endpoint de {prov.upper()} actualizado a: {new_url}")
+                else:
+                    print("\n[i] Endpoint sin cambios.")
+            except (KeyboardInterrupt, EOFError):
+                print("\nOperación cancelada.")
+            return current_provider, current_model, True
 
     if cmd == "/key":
         if len(parts) >= 3:
@@ -636,6 +696,13 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
             err_msg = str(exc)
             if not err_msg.startswith("[Error"):
                 err_msg = format_clean_api_error(exc)
+            if "conexión" in err_msg.lower() or "connection" in err_msg.lower():
+                try:
+                    prov_cfg = resolve_provider(active_provider)
+                    err_msg += f"\n  -> Endpoint consultado: {prov_cfg.base_url}"
+                    err_msg += f"\n  -> Para cambiar la dirección usa: /endpoint {active_provider} <url>"
+                except Exception:
+                    pass
             print(f"\n{err_msg}", file=sys.stderr)
 
     return 0

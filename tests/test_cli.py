@@ -141,6 +141,46 @@ class TestCLI(unittest.TestCase):
             self.assertTrue(h)
             self.assertIn("eliminado del catálogo", buf5.getvalue())
 
+    def test_handle_slash_command_endpoint(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # /endpoint sin argumentos (lista vacía)
+            buf1 = io.StringIO()
+            with patch("sys.stdout", buf1):
+                p, m, h = handle_slash_command("/endpoint", None, None, tmp_path)
+            self.assertTrue(h)
+            self.assertIn("DIRECCIONES Y ENDPOINTS DE PROVEEDORES", buf1.getvalue())
+            self.assertIn("[Por defecto]", buf1.getvalue())
+
+            # /endpoint ollama http://192.168.1.200:11434/v1
+            buf2 = io.StringIO()
+            with patch("sys.stdout", buf2):
+                p, m, h = handle_slash_command(
+                    "/endpoint ollama http://192.168.1.200:11434/v1", None, None, tmp_path
+                )
+            self.assertTrue(h)
+            self.assertIn("Endpoint actualizado para OLLAMA", buf2.getvalue())
+
+            # /endpoint para ver el listado actualizado
+            buf3 = io.StringIO()
+            with patch("sys.stdout", buf3):
+                p, m, h = handle_slash_command("/endpoint", None, None, tmp_path)
+            self.assertTrue(h)
+            self.assertIn("http://192.168.1.200:11434/v1", buf3.getvalue())
+
+            # /model add con URL de endpoint directa
+            buf4 = io.StringIO()
+            with patch("sys.stdout", buf4):
+                p, m, h = handle_slash_command(
+                    "/model add ollama mistral-7b http://vllm-server:8000/v1", None, None, tmp_path
+                )
+            self.assertTrue(h)
+            self.assertEqual(p, "ollama")
+            self.assertEqual(m, "mistral-7b")
+            self.assertIn("Endpoint: http://vllm-server:8000/v1", buf4.getvalue())
+
     def test_repl_dynamic_prompt_contextual(self):
         buf = io.StringIO()
         prompts_seen = []

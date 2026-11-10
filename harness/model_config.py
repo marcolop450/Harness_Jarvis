@@ -198,41 +198,56 @@ def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
     Si no existe o está corrupto, inicializa con valores limpios sin asumir proveedor.
     """
     path = config_path or get_default_config_path()
+    data: dict[str, Any] | None = None
+
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                if "saved_models" not in data or not isinstance(data["saved_models"], dict):
-                    data["saved_models"] = {k: list(v) for k, v in DEFAULT_MODELS.items()}
-                if "active_provider" not in data:
-                    data["active_provider"] = None
-                if "active_model" not in data:
-                    data["active_model"] = None
-                return data
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                data = parsed
         except Exception:
             pass
 
-    # Fallback global si la ruta local no existe
-    global_path = (get_global_harness_dir() / DEFAULT_CONFIG_FILE).resolve()
-    if path.resolve() != global_path and global_path.exists():
+    if data is None and config_path is None:
+        # Fallback global si la ruta local no existe y no se especificó ruta personalizada
+        global_path = (get_global_harness_dir() / DEFAULT_CONFIG_FILE).resolve()
+        if path.resolve() != global_path and global_path.exists():
+            try:
+                parsed = json.loads(global_path.read_text(encoding="utf-8"))
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                pass
+
+    if data is None:
+        data = {
+            "active_provider": None,
+            "active_model": None,
+            "saved_models": {k: list(v) for k, v in DEFAULT_MODELS.items()},
+            "endpoints": {},
+        }
         try:
-            data = json.loads(global_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
 
-    initial_config: dict[str, Any] = {
-        "active_provider": None,
-        "active_model": None,
-        "saved_models": {k: list(v) for k, v in DEFAULT_MODELS.items()},
-    }
-    try:
-        path.write_text(json.dumps(initial_config, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    if "saved_models" not in data or not isinstance(data["saved_models"], dict):
+        data["saved_models"] = {k: list(v) for k, v in DEFAULT_MODELS.items()}
+    if "active_provider" not in data:
+        data["active_provider"] = None
+    if "active_model" not in data:
+        data["active_model"] = None
+    if "endpoints" not in data or not isinstance(data["endpoints"], dict):
+        data["endpoints"] = {}
 
-    return initial_config
+    # Aplicar variables de entorno de endpoints personalizados si existen
+    for prov, url in data.get("endpoints", {}).items():
+        if url and isinstance(url, str):
+            env_key = f"{prov.upper()}_BASE_URL"
+            if not os.getenv(env_key):
+                os.environ[env_key] = url.strip()
+
+    return data
 
 
 def save_model_selection(
@@ -266,13 +281,62 @@ def get_available_models_catalog(config_path: Path | None = None) -> list[dict[s
     return catalog
 
 
+def get_provider_endpoints(config_path: Path | None = None) -> dict[str, str]:
+    """Retorna el mapeo de endpoints personalizados por proveedor."""
+    data = load_model_memory(config_path)
+    endpoints = data.get("endpoints", {})
+    return dict(endpoints) if isinstance(endpoints, dict) else {}
+
+
+def set_provider_endpoint(
+    provider: str,
+    endpoint_url: str,
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    """Configura y persiste un endpoint personalizado para un proveedor."""
+    prov = provider.strip().lower()
+    url = endpoint_url.strip()
+    if not prov or not url:
+        raise ValueError("El proveedor y el endpoint no pueden estar vacíos")
+
+    data = load_model_memory(config_path)
+    if "endpoints" not in data or not isinstance(data["endpoints"], dict):
+        data["endpoints"] = {}
+    data["endpoints"][prov] = url
+
+    # Inyectar inmediatamente en entorno de ejecución
+    os.environ[f"{prov.upper()}_BASE_URL"] = url
+
+    path = config_path or get_default_config_path()
+    try:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    # Guardar también en ~/.harness/ para disponibilidad global
+    if config_path is None:
+        try:
+            g_path = (get_global_harness_dir() / DEFAULT_CONFIG_FILE).resolve()
+            if path.resolve() != g_path:
+                g_data = load_model_memory(g_path)
+                if "endpoints" not in g_data or not isinstance(g_data["endpoints"], dict):
+                    g_data["endpoints"] = {}
+                g_data["endpoints"][prov] = url
+                g_path.write_text(json.dumps(g_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    return data
+
+
 def add_user_model(
     provider: str,
     model: str,
     config_path: Path | None = None,
     set_active: bool = True,
+    endpoint_url: str | None = None,
 ) -> dict[str, Any]:
-    """Registra un modelo definido por el usuario y opcionalmente lo activa."""
+    """Registra un modelo definido por el usuario, opcionalmente su endpoint y lo activa."""
     data = load_model_memory(config_path)
     prov = provider.strip().lower()
     mod = model.strip()
@@ -287,6 +351,13 @@ def add_user_model(
     if mod not in data["saved_models"][prov]:
         data["saved_models"][prov].append(mod)
 
+    if endpoint_url and endpoint_url.strip():
+        url = endpoint_url.strip()
+        if "endpoints" not in data or not isinstance(data["endpoints"], dict):
+            data["endpoints"] = {}
+        data["endpoints"][prov] = url
+        os.environ[f"{prov.upper()}_BASE_URL"] = url
+
     if set_active:
         data["active_provider"] = prov
         data["active_model"] = mod
@@ -296,6 +367,29 @@ def add_user_model(
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
+
+    # Persistir también copia en ~/.harness/ si la ruta es local y no personalizada
+    if config_path is None:
+        try:
+            g_path = (get_global_harness_dir() / DEFAULT_CONFIG_FILE).resolve()
+            if path.resolve() != g_path:
+                g_data = load_model_memory(g_path)
+                if "saved_models" not in g_data or not isinstance(g_data["saved_models"], dict):
+                    g_data["saved_models"] = {}
+                if prov not in g_data["saved_models"]:
+                    g_data["saved_models"][prov] = []
+                if mod not in g_data["saved_models"][prov]:
+                    g_data["saved_models"][prov].append(mod)
+                if endpoint_url and endpoint_url.strip():
+                    if "endpoints" not in g_data or not isinstance(g_data["endpoints"], dict):
+                        g_data["endpoints"] = {}
+                    g_data["endpoints"][prov] = endpoint_url.strip()
+                if set_active:
+                    g_data["active_provider"] = prov
+                    g_data["active_model"] = mod
+                g_path.write_text(json.dumps(g_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
     return data
 

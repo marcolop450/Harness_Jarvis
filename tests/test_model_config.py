@@ -6,6 +6,7 @@ from harness.model_config import (
     build_workspace_system_prompt,
     clear_session_history,
     get_available_models_catalog,
+    get_provider_endpoints,
     load_model_memory,
     load_session_history,
     remove_user_model,
@@ -13,6 +14,7 @@ from harness.model_config import (
     save_api_key_to_env,
     save_model_selection,
     save_session_history,
+    set_provider_endpoint,
 )
 
 
@@ -112,6 +114,29 @@ class TestModelConfig(unittest.TestCase):
         self.assertIn("Eres Jarvis.", prompt)
         self.assertIn("Regla 1: Usar siempre TypeScript.", prompt)
         self.assertIn(f"CWD): {self.base}", prompt)
+
+    def test_custom_provider_endpoints(self):
+        import os
+        # Catálogo inicialmente sin endpoints
+        endpoints = get_provider_endpoints(self.config_path)
+        self.assertEqual(endpoints, {})
+
+        # Configurar endpoint para ollama
+        set_provider_endpoint("ollama", "http://192.168.1.100:11434/v1", self.config_path)
+        updated = get_provider_endpoints(self.config_path)
+        self.assertEqual(updated.get("ollama"), "http://192.168.1.100:11434/v1")
+        self.assertEqual(os.environ.get("OLLAMA_BASE_URL"), "http://192.168.1.100:11434/v1")
+
+        # Agregar modelo con endpoint opcional
+        add_user_model(
+            "lmstudio",
+            "qwen2.5-coder:7b",
+            config_path=self.config_path,
+            endpoint_url="http://localhost:1234/v1",
+        )
+        endpoints2 = get_provider_endpoints(self.config_path)
+        self.assertEqual(endpoints2.get("lmstudio"), "http://localhost:1234/v1")
+        self.assertEqual(os.environ.get("LMSTUDIO_BASE_URL"), "http://localhost:1234/v1")
 
     def test_session_history_persistence_and_clear(self):
         # Inicialmente vacío
