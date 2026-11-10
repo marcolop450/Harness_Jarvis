@@ -208,12 +208,20 @@ def run_agent_loop(
             # Preparar copia efímera con observation masking para el LLM
             ephemeral_history = apply_observation_masking(history, keep_recent_steps=5)
 
-            response: NormalizedResponse = caller(
-                messages=ephemeral_history,
-                tools=active_tools,
-                provider_name=provider_name,
-                model=model,
-            )
+            try:
+                from harness.ui import compact_spinner
+                spinner_cm = compact_spinner("Jarvis está procesando tu solicitud...")
+            except Exception:
+                from contextlib import nullcontext
+                spinner_cm = nullcontext()
+
+            with spinner_cm:
+                response: NormalizedResponse = caller(
+                    messages=ephemeral_history,
+                    tools=active_tools,
+                    provider_name=provider_name,
+                    model=model,
+                )
 
             # Si el modelo invocó herramientas
             if response.tool_calls:

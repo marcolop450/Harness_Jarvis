@@ -137,7 +137,10 @@ def tool_write_file(
 
     confirmer = confirm_fn or (lambda desc, det: confirm_action(desc, det))
     if not confirmer("Crear o sobrescribir archivo", f"Ruta: {path}"):
-        return f"Acción cancelada: El usuario denegó la escritura en '{path}'."
+        return (
+            f"Acción cancelada: El usuario denegó la escritura en '{path}'. "
+            "El archivo NO fue creado ni modificado. Informa al usuario que la operación fue cancelada y no asumas que existe."
+        )
 
     try:
         safe_path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +184,10 @@ def tool_edit_file(
 
     confirmer = confirm_fn or (lambda desc, det: confirm_action(desc, det))
     if not confirmer("Editar archivo", f"Ruta: {path}\nReemplazo de '{target[:50]}...'"):
-        return f"Acción cancelada: El usuario denegó la edición en '{path}'."
+        return (
+            f"Acción cancelada: El usuario denegó la edición en '{path}'. "
+            "El archivo NO fue modificado. Informa al usuario que la operación fue cancelada."
+        )
 
     new_content = content.replace(target, replacement, 1)
     try:
@@ -240,7 +246,10 @@ def tool_run_command(
     """Ejecuta un comando en la consola del sistema operativo tras confirmación interactiva."""
     confirmer = confirm_fn or (lambda desc, det: confirm_action(desc, det))
     if not confirmer("Ejecutar comando de consola", f"Comando: {command}"):
-        return f"Acción cancelada: El usuario denegó la ejecución del comando '{command}'."
+        return (
+            f"Acción cancelada: El usuario denegó la ejecución del comando '{command}'. "
+            "El comando NO fue ejecutado y NO se realizaron cambios en el sistema. Informa al usuario que la operación fue cancelada y no asumas que los archivos o carpetas fueron creados."
+        )
 
     working_dir = (cwd or Path.cwd()).resolve()
     try:
@@ -385,7 +394,10 @@ def tool_sqlite_query(
                 return result
         confirmer = confirm_fn or confirm_action
         if not confirmer("Modificar base SQLite", f"Base: {db_path}\nSQL: {query[:500]}"):
-            return "Acción cancelada: el usuario denegó la escritura SQLite."
+            return (
+                "Acción cancelada: el usuario denegó la escritura SQLite. "
+                "La consulta no fue ejecutada y la base de datos no fue modificada."
+            )
         return run(False)
     except Exception as exc:
         return f"[SQLite Error]: {exc}"

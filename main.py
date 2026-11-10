@@ -712,20 +712,19 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
         full_system_prompt = build_workspace_system_prompt(system_prompt, base_dir=working_dir)
         clear_turn_approvals()
 
-        from harness.ui import compact_spinner, print_rich_markdown
+        from harness.ui import print_rich_markdown
 
         try:
-            with compact_spinner("Jarvis está procesando tu solicitud..."):
-                reply, conversation_history = run_turn(manager,
-                    prompt=cleaned_input,
-                    system_prompt=full_system_prompt,
-                    messages=conversation_history,
-                    provider_name=active_provider,
-                    model=active_model,
-                    base_dir=working_dir,
-                    on_step=on_step,
-                    session_approved_targets=session_approved_targets,
-                )
+            reply, conversation_history = run_turn(manager,
+                prompt=cleaned_input,
+                system_prompt=full_system_prompt,
+                messages=conversation_history,
+                provider_name=active_provider,
+                model=active_model,
+                base_dir=working_dir,
+                on_step=on_step,
+                session_approved_targets=session_approved_targets,
+            )
             save_session_history(conversation_history, base_dir=working_dir)
             save_session_record(
                 session_state["id"],

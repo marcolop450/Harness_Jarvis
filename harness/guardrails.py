@@ -258,9 +258,11 @@ def confirm_action(
         prompt_text = "¿Desea autorizar esta operacion? [s/n/a (autorizar todo para este objetivo)]: "
         answer = prompter(prompt_text).strip().lower()
     except (KeyboardInterrupt, EOFError):
+        print("\n[x] Operación cancelada por el usuario.", flush=True)
         return False
 
     if not answer:
+        print("[x] Operación cancelada: No se ingresó confirmación ('s'). No se realizaron cambios.", flush=True)
         return False
 
     if answer in ("a", "all", "auto", "aa"):
@@ -271,12 +273,18 @@ def confirm_action(
             else:
                 # Si no se pasó explícitamente conjunto de sesión, recordar en turno
                 pass
+        print(f"[✓] Operación autorizada y memorizada para '{resolved_target or 'este objetivo'}'.", flush=True)
         return True
 
     valid_affirmatives = (
         "s", "si", "sí", "ss", "sii", "y", "yes", "ye", "ok", "true", "1"
     )
-    return answer in valid_affirmatives or answer.startswith("s") or answer.startswith("y")
+    if answer in valid_affirmatives or answer.startswith("s") or answer.startswith("y"):
+        print("[✓] Operación autorizada. Ejecutando...", flush=True)
+        return True
+
+    print("[x] Operación cancelada por el usuario. No se realizaron cambios.", flush=True)
+    return False
 
 
 def authorize_and_dispatch(

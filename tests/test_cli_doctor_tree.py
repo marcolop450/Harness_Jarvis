@@ -9,6 +9,7 @@ from harness.session_state import SessionRuntime
 def test_build_directory_tree(tmp_path: Path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "archivo1.py").write_text("a", encoding="utf-8")
+    (tmp_path / "vacia").mkdir()
     (tmp_path / "archivo2.txt").write_text("b", encoding="utf-8")
     (tmp_path / ".git").mkdir()  # Debe ser ignorado
 
@@ -16,6 +17,8 @@ def test_build_directory_tree(tmp_path: Path):
     assert "sub/" in tree_str
     assert "archivo1.py" in tree_str
     assert "archivo2.txt" in tree_str
+    assert "vacia/" in tree_str
+    assert "(carpeta vacía)" in tree_str
     assert ".git" not in tree_str
 
 

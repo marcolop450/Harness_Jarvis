@@ -260,6 +260,13 @@ def build_directory_tree(
             return
 
         total = len(entries)
+        if total == 0:
+            if depth > 1:
+                lines.append(f"{prefix}└── (carpeta vacía)")
+            elif depth == 1:
+                lines.append("  └── (directorio vacío)")
+            return
+
         for idx, entry in enumerate(entries):
             is_last = idx == total - 1
             connector = "└── " if is_last else "├── "

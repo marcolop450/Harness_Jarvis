@@ -308,7 +308,7 @@ class MCPManager:
             configs = load_config(self.workspace)
         except Exception as exc:
             self.config_error = clean_error(exc)
-            logger.warning("Error en configuración MCP: %s. Continuando con herramientas nativas.", self.config_error)
+            logger.debug("Error en configuración MCP: %s. Continuando con herramientas nativas.", self.config_error)
             return
         for config in configs:
             try:
@@ -319,13 +319,13 @@ class MCPManager:
                     err_msg = connection.error or "fallo al iniciar"
                     if config.name == "git" and not (self.workspace / ".git").is_dir():
                         err_msg = f"{err_msg} (la carpeta no es un repositorio Git; usa 'git init' si deseas habilitarlo)"
-                    logger.warning(
+                    logger.debug(
                         "Servidor MCP '%s' no disponible: %s. Continuando con herramientas nativas.",
                         config.name, err_msg
                     )
             except Exception as exc:
                 err = clean_error(exc)
-                logger.warning(
+                logger.debug(
                     "Excepción al iniciar servidor MCP '%s': %s. Continuando con herramientas nativas.",
                     config.name, err
                 )
@@ -334,7 +334,7 @@ class MCPManager:
         try:
             self.start()
         except Exception as exc:
-            logger.warning("Fallo al iniciar servidores MCP: %s. Continuando con herramientas nativas.", exc)
+            logger.debug("Fallo al iniciar servidores MCP: %s. Continuando con herramientas nativas.", exc)
             return []
         return [definition for conn in self.connections.values() if conn.status == "conectado"
                 for definition in conn.catalog.values()]
