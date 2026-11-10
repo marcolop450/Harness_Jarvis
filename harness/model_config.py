@@ -567,3 +567,21 @@ def build_workspace_system_prompt(
 
     sections.append(f"\n--- Contexto de Ejecución ---\nDirectorio de trabajo actual (CWD): {cwd}")
     return "\n\n".join(sections)
+
+
+def has_valid_key_for_provider(provider: str | None) -> bool:
+    """Verifica si el entorno cuenta con una clave o acceso válido para el proveedor."""
+    if not provider:
+        return False
+    prov = provider.lower()
+    if prov in ("ollama", "lmstudio", "local", "custom"):
+        return True
+    from harness.llm_provider import SUPPORTED_PROVIDERS
+    info = SUPPORTED_PROVIDERS.get(prov)
+    if not info:
+        return False
+    base_url = os.getenv(f"{prov.upper()}_BASE_URL", "")
+    if any(loc in base_url for loc in ("localhost", "127.0.0.1", "0.0.0.0")):
+        return True
+    return bool(os.getenv(info["env_key"]))
+

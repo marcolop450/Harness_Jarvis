@@ -288,6 +288,58 @@ class TestKernelIntelligenceAndMemory(unittest.TestCase):
         self.assertEqual(tool_entry["tool_call_id"], "call_broken")
         self.assertIn("Error de formato", tool_entry["content"])
 
+    def test_dynamic_max_steps_explicit(self):
+        steps_called = 0
+
+        def endless_tool_caller(**kwargs):
+            nonlocal steps_called
+            steps_called += 1
+            return NormalizedResponse(
+                content="Pensando...",
+                tool_calls=[
+                    NormalizedToolCall(id=f"call_{steps_called}", name="list_dir", arguments={"path": "."})
+                ],
+            )
+
+        reply, history = run_agent_loop(
+            prompt="Bucle infinito",
+            llm_caller=endless_tool_caller,
+            tool_executor=lambda name, args: "[]",
+            max_steps=4,
+        )
+
+        self.assertEqual(steps_called, 4)
+        self.assertIn("Se alcanzó el límite estricto de 4 pasos", reply)
+
+    def test_dynamic_max_steps_from_session_runtime(self):
+        from harness.session_state import get_session_runtime
+
+        runtime = get_session_runtime()
+        runtime.set_max_steps(3)
+        try:
+            steps_called = 0
+
+            def endless_tool_caller(**kwargs):
+                nonlocal steps_called
+                steps_called += 1
+                return NormalizedResponse(
+                    content="Pensando...",
+                    tool_calls=[
+                        NormalizedToolCall(id=f"call_{steps_called}", name="list_dir", arguments={"path": "."})
+                    ],
+                )
+
+            reply, history = run_agent_loop(
+                prompt="Bucle infinito",
+                llm_caller=endless_tool_caller,
+                tool_executor=lambda name, args: "[]",
+            )
+
+            self.assertEqual(steps_called, 3)
+            self.assertIn("Se alcanzó el límite estricto de 3 pasos", reply)
+        finally:
+            runtime.reset()
+
 
 if __name__ == "__main__":
     unittest.main()

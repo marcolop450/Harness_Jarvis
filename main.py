@@ -47,21 +47,7 @@ DEFAULT_BASE_PROMPT: str = (
 )
 
 
-def has_valid_key_for_provider(provider: str | None) -> bool:
-    """Verifica si el entorno cuenta con una clave configurada para el proveedor."""
-    if not provider:
-        return False
-    prov = provider.lower()
-    if prov in ("ollama", "lmstudio", "local", "custom"):
-        return True
-    info = SUPPORTED_PROVIDERS.get(prov)
-    if not info:
-        return False
-    # Si tiene una URL local configurada (localhost, 127.0.0.1, 0.0.0.0), no requiere API key de pago
-    base_url = os.getenv(f"{prov.upper()}_BASE_URL", "")
-    if any(loc in base_url for loc in ("localhost", "127.0.0.1", "0.0.0.0")):
-        return True
-    return bool(os.getenv(info["env_key"]))
+from harness.model_config import has_valid_key_for_provider
 
 
 def get_prompt_symbol() -> str:
@@ -130,28 +116,20 @@ def print_banner(
     cwd: Path,
     has_key: bool,
 ) -> None:
-    """Imprime el encabezado visual del agente en la terminal."""
-    if not provider_name or not model_name:
-        prov_str = "[SIN CONFIGURAR]"
-        model_str = "[SIN CONFIGURAR]"
-        status_str = "Pendiente (Usa /key o /guide para empezar)"
-    else:
-        prov_str = provider_name.upper()
-        model_str = model_name
-        status_str = "CONFIGURADA" if has_key else "NO DETECTADA (Usa /key o /model add/ollama)"
+    """Imprime el encabezado visual del agente en la terminal usando Rich con bordes redondeados."""
+    from harness.session_state import get_session_runtime
+    from harness.ui import print_rich_banner
 
-    banner = f"""
-==============================================================
-  Harness Jarvis CLI - Multi-API Agent
-  Espacio   : {cwd}
-  Proveedor : {prov_str}
-  Modelo    : {model_str}
-  Estado API: {status_str}
-  Limite    : MAX_STEPS={MAX_STEPS} por consulta
-  Comandos  : /model | /endpoint | /key | /mcp | /compact | /sessions | /resume | /guide | /clear | /reset | exit
-==============================================================
-"""
-    print(banner.strip())
+    rt = get_session_runtime()
+    print_rich_banner(
+        provider_name,
+        model_name,
+        cwd,
+        has_key,
+        max_steps=rt.max_steps,
+        mode=rt.mode,
+        approval_policy=rt.approval_policy,
+    )
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
@@ -204,6 +182,35 @@ def handle_slash_command(
     if not parts:
         return current_provider, current_model, False
     cmd = parts[0].lower()
+
+    from harness.cli import (
+        handle_control_command,
+        handle_observability_command,
+        handle_diagnostics_command,
+    )
+    handled_ctrl, msg_ctrl = handle_control_command(command_line)
+    if handled_ctrl:
+        if msg_ctrl:
+            print(msg_ctrl)
+        return current_provider, current_model, True
+
+    handled_obs, msg_obs = handle_observability_command(command_line, history=conversation_history, cwd=cwd)
+    if handled_obs:
+        if msg_obs:
+            print(msg_obs)
+        return current_provider, current_model, True
+
+    handled_diag, msg_diag = handle_diagnostics_command(
+        command_line,
+        provider=current_provider,
+        model=current_model,
+        cwd=cwd,
+        mcp_manager=mcp_manager,
+    )
+    if handled_diag:
+        if msg_diag:
+            print(msg_diag)
+        return current_provider, current_model, True
 
     if cmd == "/mcp":
         if len(parts) > 2 or (len(parts) == 2 and parts[1] != "reconnect"):
@@ -624,13 +631,30 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
     folder_name = working_dir.name or str(working_dir)
     sym = get_prompt_symbol()
 
+    from harness.cli import create_prompt_session
+    from harness.session_state import get_session_runtime
+
+    try:
+        prompt_session = create_prompt_session()
+    except Exception:
+        prompt_session = None
+
     while True:
         try:
+            rt = get_session_runtime()
+            mode_badge = " [PLAN]" if rt.is_plan_mode() else ""
             if active_provider and active_model:
-                prompt_symbol = f"\n[{folder_name} | {sym} {active_provider}:{active_model}] jarvis> "
+                prompt_symbol = f"\n[{folder_name} | {sym} {active_provider}:{active_model}{mode_badge}] jarvis> "
             else:
-                prompt_symbol = f"\n[{folder_name} | {sym} [sin configurar]] jarvis> "
-            user_input = input(prompt_symbol).strip()
+                prompt_symbol = f"\n[{folder_name} | {sym} [sin configurar]{mode_badge}] jarvis> "
+
+            if prompt_session is not None and getattr(sys.stdin, "isatty", lambda: False)():
+                try:
+                    user_input = prompt_session.prompt(prompt_symbol).strip()
+                except Exception:
+                    user_input = input(prompt_symbol).strip()
+            else:
+                user_input = input(prompt_symbol).strip()
         except (KeyboardInterrupt, EOFError):
             print("\nSesión finalizada por el usuario.")
             break
@@ -688,17 +712,20 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
         full_system_prompt = build_workspace_system_prompt(system_prompt, base_dir=working_dir)
         clear_turn_approvals()
 
+        from harness.ui import compact_spinner, print_rich_markdown
+
         try:
-            reply, conversation_history = run_turn(manager,
-                prompt=cleaned_input,
-                system_prompt=full_system_prompt,
-                messages=conversation_history,
-                provider_name=active_provider,
-                model=active_model,
-                base_dir=working_dir,
-                on_step=on_step,
-                session_approved_targets=session_approved_targets,
-            )
+            with compact_spinner("Jarvis está procesando tu solicitud..."):
+                reply, conversation_history = run_turn(manager,
+                    prompt=cleaned_input,
+                    system_prompt=full_system_prompt,
+                    messages=conversation_history,
+                    provider_name=active_provider,
+                    model=active_model,
+                    base_dir=working_dir,
+                    on_step=on_step,
+                    session_approved_targets=session_approved_targets,
+                )
             save_session_history(conversation_history, base_dir=working_dir)
             save_session_record(
                 session_state["id"],
@@ -707,7 +734,11 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
                 conversation_history,
                 base_dir=working_dir,
             )
-            print(f"\n{reply}")
+            print()
+            try:
+                print_rich_markdown(reply)
+            except Exception:
+                print(reply)
         except Exception as exc:
             err_msg = str(exc)
             if not err_msg.startswith("[Error"):

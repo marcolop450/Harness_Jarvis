@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 from harness.llm_provider import NormalizedResponse, NormalizedToolCall, call_llm
+from harness.session_state import get_session_runtime
 from harness.tools import execute_tool, get_tools_definitions
 
 MAX_STEPS: int = 15
@@ -139,13 +140,18 @@ def run_agent_loop(
     include_timing: bool = True,
     session_approved_targets: set[str] | None = None,
     inject_environment: bool = True,
+    max_steps: int | None = None,
+    plan_mode: bool | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Ejecuta el ciclo reactivo del agente acotado por MAX_STEPS = 15.
+    """Ejecuta el ciclo reactivo del agente acotado por MAX_STEPS (configurable dinámicamente).
 
     Retorna una tupla (respuesta_final, historial_completo).
     """
     start_time = time.perf_counter()
     history: list[dict[str, Any]] = list(messages) if messages is not None else []
+    runtime = get_session_runtime()
+    effective_max_steps = max_steps if max_steps is not None else runtime.max_steps
+    is_plan = plan_mode if plan_mode is not None else runtime.is_plan_mode()
 
     if system_prompt:
         if inject_environment:
@@ -154,8 +160,25 @@ def run_agent_loop(
         else:
             full_system_prompt = system_prompt
 
+        if is_plan:
+            full_system_prompt += (
+                "\n\n[MODO ARQUITECTO / PLAN ACTIVO]\n"
+                "Operas en modo de solo lectura y diseño arquitectónico. Tienes estrictamente prohibido "
+                "modificar o crear archivos en disco (write_file y edit_file están bloqueadas). "
+                "Tu objetivo es analizar, inspeccionar y estructurar la solución técnica en tu respuesta."
+            )
+
         if not any(m.get("role") == "system" for m in history):
             history.insert(0, {"role": "system", "content": full_system_prompt})
+    elif is_plan:
+        history.insert(0, {
+            "role": "system",
+            "content": (
+                "[MODO ARQUITECTO / PLAN ACTIVO]\n"
+                "Operas en modo de solo lectura y diseño arquitectónico. Tienes estrictamente prohibido "
+                "modificar o crear archivos en disco (write_file y edit_file están bloqueadas)."
+            ),
+        })
 
     history.append({"role": "user", "content": prompt})
 
@@ -176,11 +199,11 @@ def run_agent_loop(
     step = 0
 
     try:
-        while step < MAX_STEPS:
+        while step < effective_max_steps:
             step += 1
 
             if on_step:
-                on_step(step, MAX_STEPS)
+                on_step(step, effective_max_steps)
 
             # Preparar copia efímera con observation masking para el LLM
             ephemeral_history = apply_observation_masking(history, keep_recent_steps=5)
@@ -214,7 +237,13 @@ def run_agent_loop(
                 for tc in response.tool_calls:
                     # Bucle de auto-reparación (Self-Healing)
                     try:
-                        if "parse_error" in tc.arguments:
+                        if is_plan and tc.name in ("write_file", "edit_file"):
+                            result_text = (
+                                f"Operación bloqueada en herramienta '{tc.name}': El modo Arquitecto (/plan) está activo. "
+                                "No se permiten modificaciones ni escrituras de archivos en disco. "
+                                "Presenta tu análisis, plan o código dentro del cuerpo de tu respuesta de texto."
+                            )
+                        elif "parse_error" in tc.arguments:
                             result_text = (
                                 f"Error de formato en herramienta '{tc.name}': Los argumentos JSON son inválidos. "
                                 f"Detalle: {tc.arguments.get('parse_error')}. "
@@ -222,6 +251,16 @@ def run_agent_loop(
                                 "Por favor corrige la sintaxis JSON y vuelve a emitir la llamada."
                             )
                         else:
+                            if tc.name in ("write_file", "edit_file") and "path" in tc.arguments:
+                                target_p = (base_dir or Path.cwd()) / tc.arguments["path"]
+                                if target_p.exists() and target_p.is_file():
+                                    try:
+                                        runtime.record_file_snapshot(
+                                            target_p,
+                                            target_p.read_text(encoding="utf-8", errors="replace"),
+                                        )
+                                    except Exception:
+                                        pass
                             result_text = active_executor(tc.name, tc.arguments)
                     except Exception as exc:
                         result_text = f"Error al ejecutar herramienta '{tc.name}': {exc}"
@@ -243,7 +282,7 @@ def run_agent_loop(
 
         # Se agotó el límite estricto de pasos
         elapsed = time.perf_counter() - start_time
-        limit_message = f"Se alcanzó el límite estricto de {MAX_STEPS} pasos sin concluir la tarea."
+        limit_message = f"Se alcanzó el límite estricto de {effective_max_steps} pasos sin concluir la tarea."
         if include_timing:
             limit_message += f"\n\n[⏱️ {elapsed:.2f}s]"
         history.append({"role": "assistant", "content": limit_message})

@@ -203,15 +203,22 @@ def confirm_action(
     input_fn: Callable[[str], str] | None = None,
     target: str | None = None,
     session_approved_targets: set[str] | None = None,
+    policy: str | None = None,
 ) -> bool:
     """Solicita confirmación interactiva [s/n/a] al usuario.
 
     Soporta:
+    - Política 'AUTO': aprueba automáticamente sin bloquear la terminal.
     - 's' / 'si' / 'y': autoriza la operación actual.
     - 'n' / 'no': rechaza la operación.
     - 'a' / 'all': autoriza la operación actual y recuerda la aprobación para el
       mismo objetivo durante toda la sesión activa.
     """
+    from harness.session_state import get_session_runtime
+
+    effective_policy = (policy or get_session_runtime().approval_policy).strip().upper()
+    if effective_policy == "AUTO":
+        return True
     resolved_target = target
     if not resolved_target and details:
         if details.startswith("Ruta: "):
@@ -277,12 +284,13 @@ def authorize_and_dispatch(
     args: dict,
     session_approved_targets: set[str] | None = None,
     input_fn: Callable[[str], str] | None = None,
+    base_dir: Path | None = None,
 ) -> bool:
     """Valida guardrails y gestiona HITL para cualquier herramienta nativa o MCP."""
     if tool_name in ("read_file", "write_file", "edit_file", "list_dir"):
         path_str = args.get("path", "")
         if path_str:
-            validate_safe_path(path_str)
+            validate_safe_path(path_str, base_dir=base_dir)
 
     risk_level, target = classify_risk(tool_name, args)
     if risk_level == RISK_LEVEL_AUTO:

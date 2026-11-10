@@ -22,7 +22,7 @@ El módulo guardrails SHALL validar que toda ruta destino resida estrictamente d
 - **THEN** se rechaza la ejecución y se notifica que la ruta está fuera del espacio autorizado
 
 ### Requirement: Confirmación interactiva para operaciones destructivas
-Las herramientas clasificadas como Nivel 1 (escrituras) o Nivel 2 (comandos fuera de whitelist) SHALL solicitar aprobación interactiva mediante [s/n/a] al usuario, permitiendo autorizar individualmente, rechazar o autorizar en lote ('a') el archivo durante toda la sesión activa, ejecutando automáticamente comandos seguros sin operadores de encadenamiento.
+Las herramientas clasificadas como Nivel 1 (escrituras) o Nivel 2 (comandos fuera de whitelist) SHALL solicitar aprobación interactiva mediante [s/n/a] bajo la política CONFIRM, o ejecutarse sin interrupción bajo la política AUTO siempre que cumplan con las restricciones de seguridad inviolables.
 
 #### Scenario: Usuario autoriza la operación
 - **GIVEN** una llamada a write_file o run_command pendiente de confirmación
@@ -53,6 +53,11 @@ Las herramientas clasificadas como Nivel 1 (escrituras) o Nivel 2 (comandos fuer
 - **GIVEN** un comando de consola que coincide con un prefijo seguro (pytest, git diff, ruff) y no contiene operadores de shell (&&, ;, |, >, <)
 - **WHEN** se evalúa el comando en los guardrails
 - **THEN** se clasifica como seguro y se ejecuta sin solicitar confirmación interactiva
+
+#### Scenario: Conmutación a política automática en tiempo de ejecución
+- **GIVEN** la política de confirmación establecida en 'auto' mediante el comando /approval
+- **WHEN** una herramienta de escritura o comando dentro de los límites de seguridad es despachada
+- **THEN** la acción se ejecuta automáticamente sin solicitar confirmación [s/n] interactiva, preservando intacto el bloqueo de .env y path traversal
 
 ### Requirement: Políticas MCP locales obligatorias
 Jarvis SHALL autorizar herramientas y validar argumentos localmente sin confiar en anotaciones remotas; Git solo permite lectura del repositorio activo y Filesystem solo rutas autorizadas sin secretos.
