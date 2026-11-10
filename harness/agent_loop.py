@@ -1,11 +1,15 @@
 """Bucle de control reactivo del Agente Harness.
 
-Implementa el ciclo central while con límite inamovible MAX_STEPS = 15
-y despacho seguro de las 6 herramientas operativas.
+Implementa el ciclo central while con límite inamovible MAX_STEPS = 15,
+inyección proactiva de contexto ambiental, observation masking efímero
+y auto-reparación ante fallos de herramientas.
 """
 
 from __future__ import annotations
 import json
+import os
+import platform
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +28,102 @@ SUBAGENT_SYSTEM_PROMPT: str = (
 )
 
 
+def build_environment_context(base_dir: Path | None = None) -> str:
+    """Construye un bloque de contexto ambiental estructurado para inyectar en el System Prompt."""
+    cwd = (base_dir or Path.cwd()).resolve()
+    os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
+
+    # 1. Información Git (rama y estado)
+    git_info = "No es un repositorio Git o Git no está disponible"
+    try:
+        branch_proc = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if branch_proc.returncode == 0:
+            branch = branch_proc.stdout.strip()
+            status_proc = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            dirty_lines = [l for l in status_proc.stdout.splitlines() if l.strip()]
+            status_summary = f"{len(dirty_lines)} cambios pendientes" if dirty_lines else "limpio"
+            git_info = f"Rama: {branch} ({status_summary})"
+    except Exception:
+        pass
+
+    # 2. Árbol de archivos resumido
+    ignore_dirs = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache", ".harness_sessions"}
+    tree_lines = []
+    try:
+        entries = sorted(list(cwd.iterdir()), key=lambda e: (not e.is_dir(), e.name.lower()))
+        for entry in entries[:25]:
+            if entry.name in ignore_dirs:
+                continue
+            if entry.is_dir():
+                tree_lines.append(f"  ├── {entry.name}/")
+            else:
+                tree_lines.append(f"  ├── {entry.name}")
+        if len(entries) > 25:
+            tree_lines.append(f"  └── ... ({len(entries) - 25} elementos más)")
+    except Exception as exc:
+        tree_lines.append(f"  [Error al listar directorio: {exc}]")
+
+    tree_str = "\n".join(tree_lines) if tree_lines else "  (directorio vacío)"
+
+    # 3. Reglas del proyecto si existe JARVIS.md o AGENT.md
+    rules_block = ""
+    for rule_file in ("JARVIS.md", "AGENT.md"):
+        candidate = cwd / rule_file
+        if candidate.exists() and candidate.is_file():
+            try:
+                rule_content = candidate.read_text(encoding="utf-8", errors="replace")
+                if len(rule_content) > 2000:
+                    rule_content = rule_content[:2000] + "\n[... Reglas truncadas a 2000 caracteres ...]"
+                rules_block = f"\n\n## Reglas del Proyecto ({rule_file}):\n{rule_content}"
+                break
+            except Exception:
+                pass
+
+    context = (
+        "=== CONTEXTO DEL ENTORNO DE EJECUCIÓN ===\n"
+        f"- Sistema Operativo: {os_info}\n"
+        f"- Directorio de Trabajo (CWD): {cwd}\n"
+        f"- Git: {git_info}\n"
+        "- Estructura del Proyecto:\n"
+        f"{tree_str}"
+        f"{rules_block}\n"
+        "========================================="
+    )
+    return context
+
+
+def apply_observation_masking(messages: list[dict[str, Any]], keep_recent_steps: int = 5) -> list[dict[str, Any]]:
+    """Genera una copia efímera del historial enmascarando observaciones antiguas (> keep_recent_steps).
+
+    Preserva intactos todos los role, tool_call_id y la estructura del mensaje.
+    """
+    ephemeral = [dict(m) for m in messages]
+    tool_indices = [idx for idx, m in enumerate(ephemeral) if m.get("role") == "tool"]
+
+    if len(tool_indices) > keep_recent_steps:
+        mask_indices = set(tool_indices[:-keep_recent_steps])
+        for idx in mask_indices:
+            orig = ephemeral[idx]
+            ephemeral[idx] = {
+                **orig,
+                "content": "[Contenido de herramienta anterior enmascarado para optimizar ventana de contexto RAM. Usa read_file o reejecuta si requieres refrescarlo.]",
+            }
+
+    return ephemeral
+
+
 def run_agent_loop(
     prompt: str,
     system_prompt: str | None = None,
@@ -37,6 +137,8 @@ def run_agent_loop(
     base_dir: Path | None = None,
     confirm_fn: Callable[[str, str], bool] | None = None,
     include_timing: bool = True,
+    session_approved_targets: set[str] | None = None,
+    inject_environment: bool = True,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Ejecuta el ciclo reactivo del agente acotado por MAX_STEPS = 15.
 
@@ -45,8 +147,15 @@ def run_agent_loop(
     start_time = time.perf_counter()
     history: list[dict[str, Any]] = list(messages) if messages is not None else []
 
-    if system_prompt and not any(m.get("role") == "system" for m in history):
-        history.insert(0, {"role": "system", "content": system_prompt})
+    if system_prompt:
+        if inject_environment:
+            env_context = build_environment_context(base_dir)
+            full_system_prompt = f"{system_prompt}\n\n{env_context}"
+        else:
+            full_system_prompt = system_prompt
+
+        if not any(m.get("role") == "system" for m in history):
+            history.insert(0, {"role": "system", "content": full_system_prompt})
 
     history.append({"role": "user", "content": prompt})
 
@@ -55,70 +164,93 @@ def run_agent_loop(
 
     if tool_executor is None:
         def default_executor(name: str, args: dict[str, Any]) -> str:
-            return execute_tool(name, args, base_dir=base_dir, confirm_fn=confirm_fn)
+            def local_confirmer(desc: str, details: str) -> bool:
+                from harness.guardrails import confirm_action
+                return confirm_action(desc, details, session_approved_targets=session_approved_targets)
+            cf = confirm_fn or local_confirmer
+            return execute_tool(name, args, base_dir=base_dir, confirm_fn=cf)
         active_executor = default_executor
     else:
         active_executor = tool_executor
 
     step = 0
 
-    while step < MAX_STEPS:
-        step += 1
+    try:
+        while step < MAX_STEPS:
+            step += 1
 
-        if on_step:
-            on_step(step, MAX_STEPS)
+            if on_step:
+                on_step(step, MAX_STEPS)
 
-        response: NormalizedResponse = caller(
-            messages=history,
-            tools=active_tools,
-            provider_name=provider_name,
-            model=model,
-        )
+            # Preparar copia efímera con observation masking para el LLM
+            ephemeral_history = apply_observation_masking(history, keep_recent_steps=5)
 
-        # Si el modelo invocó herramientas
-        if response.tool_calls:
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
-                        },
-                    }
-                    for tc in response.tool_calls
-                ],
-            }
-            history.append(assistant_msg)
+            response: NormalizedResponse = caller(
+                messages=ephemeral_history,
+                tools=active_tools,
+                provider_name=provider_name,
+                model=model,
+            )
 
-            for tc in response.tool_calls:
-                result_text = active_executor(tc.name, tc.arguments)
+            # Si el modelo invocó herramientas
+            if response.tool_calls:
+                assistant_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                            },
+                        }
+                        for tc in response.tool_calls
+                    ],
+                }
+                history.append(assistant_msg)
 
-                history.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_text,
-                })
-        else:
-            # Respuesta final de texto sin tool calls
-            final_content = response.content or ""
-            if include_timing:
-                elapsed = time.perf_counter() - start_time
-                time_badge = f"[⏱️ {elapsed:.2f}s]"
-                final_content = f"{final_content}\n\n{time_badge}" if final_content else time_badge
-            history.append({"role": "assistant", "content": final_content})
-            return final_content, history
+                for tc in response.tool_calls:
+                    # Bucle de auto-reparación (Self-Healing)
+                    try:
+                        if "parse_error" in tc.arguments:
+                            result_text = (
+                                f"Error de formato en herramienta '{tc.name}': Los argumentos JSON son inválidos. "
+                                f"Detalle: {tc.arguments.get('parse_error')}. "
+                                f"Argumentos recibidos: {tc.arguments.get('raw_arguments')}. "
+                                "Por favor corrige la sintaxis JSON y vuelve a emitir la llamada."
+                            )
+                        else:
+                            result_text = active_executor(tc.name, tc.arguments)
+                    except Exception as exc:
+                        result_text = f"Error al ejecutar herramienta '{tc.name}': {exc}"
 
-    # Se agotó el límite estricto de pasos
-    elapsed = time.perf_counter() - start_time
-    limit_message = f"Se alcanzó el límite estricto de {MAX_STEPS} pasos sin concluir la tarea."
-    if include_timing:
-        limit_message += f"\n\n[⏱️ {elapsed:.2f}s]"
-    history.append({"role": "assistant", "content": limit_message})
-    return limit_message, history
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result_text,
+                    })
+            else:
+                # Respuesta final de texto sin tool calls
+                final_content = response.content or ""
+                if include_timing:
+                    elapsed = time.perf_counter() - start_time
+                    time_badge = f"[⏱️ {elapsed:.2f}s]"
+                    final_content = f"{final_content}\n\n{time_badge}" if final_content else time_badge
+                history.append({"role": "assistant", "content": final_content})
+                return final_content, history
+
+        # Se agotó el límite estricto de pasos
+        elapsed = time.perf_counter() - start_time
+        limit_message = f"Se alcanzó el límite estricto de {MAX_STEPS} pasos sin concluir la tarea."
+        if include_timing:
+            limit_message += f"\n\n[⏱️ {elapsed:.2f}s]"
+        history.append({"role": "assistant", "content": limit_message})
+        return limit_message, history
+    finally:
+        from harness.guardrails import clear_turn_approvals
+        clear_turn_approvals()
 
 
 def run_subagent(
@@ -129,7 +261,7 @@ def run_subagent(
     llm_caller: Callable[..., NormalizedResponse] | None = None,
     tool_executor: Callable[[str, dict[str, Any]], str] | None = None,
 ) -> str:
-    """Ejecuta un subagente de investigación aislado con contexto limpio (Figura 1 del PDF).
+    """Ejecuta un subagente de investigación aislado con contexto limpio.
 
     Solo tiene acceso a herramientas de lectura y retorna exclusivamente un resumen final
     sin contaminar la ventana de contexto del agente principal.
@@ -137,7 +269,6 @@ def run_subagent(
     caller = llm_caller or call_llm
     cwd = (base_dir or Path.cwd()).resolve()
 
-    # Catálogo acotado estrictamente a solo lectura
     read_only_tools = [
         t for t in get_tools_definitions()
         if t.get("function", {}).get("name") in ("read_file", "list_dir", "search_code")
@@ -152,7 +283,6 @@ def run_subagent(
     else:
         active_executor = tool_executor
 
-    # Contexto limpio y aislado
     subagent_history: list[dict[str, Any]] = [
         {"role": "system", "content": SUBAGENT_SYSTEM_PROMPT},
         {"role": "user", "content": f"Tarea de investigación:\n{task}"},

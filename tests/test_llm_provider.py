@@ -9,6 +9,7 @@ from harness.llm_provider import (
     call_llm,
     format_clean_api_error,
     normalize_arguments,
+    repair_json_arguments,
     resolve_provider,
     SUPPORTED_PROVIDERS,
 )
@@ -86,6 +87,24 @@ class TestCallLLM(unittest.TestCase):
         self.assertIn("raw_arguments", res)
         self.assertIn("parse_error", res)
 
+    def test_repair_json_arguments(self):
+        # 1. Bloque Markdown
+        md_json = "```json\n{\"path\": \"main.py\", \"mode\": \"w\"}\n```"
+        self.assertEqual(repair_json_arguments(md_json), {"path": "main.py", "mode": "w"})
+
+        # 2. Coma colgante / trailing comma
+        trailing = '{"items": [1, 2, ], "active": true, }'
+        self.assertEqual(repair_json_arguments(trailing), {"items": [1, 2], "active": True})
+
+        # 3. Texto conversacional con JSON integrado
+        surrounded = 'Aquí está la llamada:\n{"file": "test.txt"}\nEspero te sirva.'
+        self.assertEqual(repair_json_arguments(surrounded), {"file": "test.txt"})
+
+        # 4. JSON totalmente roto
+        broken = "no hay json aqui"
+        res = repair_json_arguments(broken)
+        self.assertEqual(res.get("parse_error"), "JSON malformado no recuperable")
+
     def test_call_llm_text_response(self):
         mock_client = MagicMock()
         mock_msg = SimpleNamespace(content="Hola desde LLM", tool_calls=None)
@@ -162,11 +181,13 @@ class TestCleanApiErrorsAndTokens(unittest.TestCase):
                     messages=[{"role": "user", "content": "Hola"}],
                     provider_name="groq",
                     client=mock_client,
+                    sleep_fn=lambda _: None,
+                    max_retries=1,
                 )
             self.assertIn("Error 429", str(ctx.exception))
             self.assertIn("Límite de tokens/cuota", str(ctx.exception))
 
-    def test_call_llm_passes_max_tokens(self):
+    def test_call_llm_default_max_tokens_is_4096(self):
         mock_client = MagicMock()
         mock_msg = SimpleNamespace(content="Respuesta", tool_calls=None)
         mock_choice = SimpleNamespace(message=mock_msg, finish_reason="stop")
@@ -177,10 +198,62 @@ class TestCleanApiErrorsAndTokens(unittest.TestCase):
                 messages=[{"role": "user", "content": "Hola"}],
                 provider_name="openai",
                 client=mock_client,
-                max_tokens=1500,
             )
             _, kwargs = mock_client.chat.completions.create.call_args
-            self.assertEqual(kwargs.get("max_tokens"), 1500)
+            self.assertEqual(kwargs.get("max_tokens"), 4096)
+
+    def test_call_llm_exponential_backoff_recovery(self):
+        mock_client = MagicMock()
+        mock_msg = SimpleNamespace(content="Exito tras reintento", tool_calls=None)
+        mock_choice = SimpleNamespace(message=mock_msg, finish_reason="stop")
+        success_resp = SimpleNamespace(choices=[mock_choice])
+
+        sleep_delays = []
+        # Falla 2 veces con 429 y tiene éxito en el 3er intento
+        mock_client.chat.completions.create.side_effect = [
+            Exception("Error 429: Rate limit"),
+            Exception("Error 429: Rate limit"),
+            success_resp,
+        ]
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            resp = call_llm(
+                messages=[{"role": "user", "content": "Test"}],
+                provider_name="openai",
+                client=mock_client,
+                max_retries=3,
+                base_delay=1.0,
+                sleep_fn=lambda d: sleep_delays.append(d),
+            )
+            self.assertEqual(resp.content, "Exito tras reintento")
+            self.assertEqual(len(sleep_delays), 2)
+            self.assertGreater(sleep_delays[1], sleep_delays[0])
+
+    def test_call_llm_respects_retry_after_header(self):
+        mock_client = MagicMock()
+        mock_msg = SimpleNamespace(content="Exito", tool_calls=None)
+        mock_choice = SimpleNamespace(message=mock_msg, finish_reason="stop")
+        success_resp = SimpleNamespace(choices=[mock_choice])
+
+        sleep_delays = []
+        exc_with_header = Exception("429 Too Many Requests")
+        exc_with_header.response = SimpleNamespace(headers={"retry-after": "5.5"})
+
+        mock_client.chat.completions.create.side_effect = [
+            exc_with_header,
+            success_resp,
+        ]
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+            resp = call_llm(
+                messages=[{"role": "user", "content": "Test"}],
+                provider_name="openai",
+                client=mock_client,
+                max_retries=2,
+                sleep_fn=lambda d: sleep_delays.append(d),
+            )
+            self.assertEqual(resp.content, "Exito")
+            self.assertEqual(sleep_delays, [5.5])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from harness.tools import (
     TOOL_RISK_MAP,
     execute_tool,
     get_tools_definitions,
+    smart_truncate,
     tool_edit_file,
     tool_list_dir,
     tool_sqlite_query,
@@ -78,6 +79,14 @@ class TestReadingTools(unittest.TestCase):
         self.assertEqual(len(truncated), 50)
         self.assertLessEqual(len(truncate_output(long_text, max_chars=10)), 10)
 
+    def test_smart_truncate_head_and_tail(self):
+        huge_text = "START_HEAD_" + ("x" * 8000) + "_END_TAIL"
+        truncated = smart_truncate(huge_text, head_chars=1000, tail_chars=3000, max_chars=4000)
+        self.assertLessEqual(len(truncated), 4000)
+        self.assertTrue(truncated.startswith("START_HEAD_"))
+        self.assertTrue(truncated.endswith("_END_TAIL"))
+        self.assertIn("caracteres omitidos por el arnés", truncated)
+
     def test_read_file_full_and_range(self):
         full = tool_read_file("sample.txt", base_dir=self.base)
         self.assertIn("linea 1", full)
@@ -87,6 +96,11 @@ class TestReadingTools(unittest.TestCase):
         self.assertIn("2: linea 2", ranged)
         self.assertIn("3: linea 3", ranged)
         self.assertNotIn("linea 1", ranged)
+
+    def test_read_file_with_line_numbers(self):
+        numbered = tool_read_file("sample.txt", line_numbers=True, base_dir=self.base)
+        self.assertIn("[L1] linea 1", numbered)
+        self.assertIn("[L4] linea 4", numbered)
 
     def test_read_file_non_existent(self):
         res = tool_read_file("missing.txt", base_dir=self.base)
@@ -160,6 +174,20 @@ class TestModificationTools(unittest.TestCase):
             confirm_fn=lambda _d, _det: True,
         )
         self.assertIn("No se encontró la cadena 'target'", res)
+
+    def test_edit_file_multiple_occurrences_diagnostic(self):
+        target_file = self.base / "multiple.txt"
+        target_file.write_text("repeat_item\nsome code\nrepeat_item\n", encoding="utf-8")
+
+        res = tool_edit_file(
+            "multiple.txt",
+            target="repeat_item",
+            replacement="new_item",
+            base_dir=self.base,
+            confirm_fn=lambda _d, _det: True,
+        )
+        self.assertIn("aparece 2 veces", res)
+        self.assertIn("ambigüedad", res)
 
     def test_run_command_confirmed(self):
         res = tool_run_command("echo test_run", cwd=self.base, confirm_fn=lambda _d, _det: True)

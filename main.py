@@ -484,18 +484,44 @@ def run_turn(manager: MCPManager, **kwargs):
         print(manager.report(), file=sys.stderr)
     native = get_tools_definitions()
 
+    session_set = kwargs.get("session_approved_targets")
+    custom_confirm = kwargs.get("confirm_fn") or manager.confirm_fn
+
+    if custom_confirm is not None:
+        confirmer = custom_confirm
+    elif session_set is not None:
+        def session_confirmer(desc: str, details: str) -> bool:
+            from harness.guardrails import confirm_action
+            return confirm_action(desc, details, session_approved_targets=session_set)
+        confirmer = session_confirmer
+    else:
+        confirmer = None
+
     def dispatch(name, arguments):
         if name.startswith("mcp_"):
             return manager.execute(name, arguments)
-        return execute_tool(name, arguments, base_dir=manager.workspace, confirm_fn=manager.confirm_fn)
+        return execute_tool(name, arguments, base_dir=manager.workspace, confirm_fn=confirmer)
 
     return run_agent_loop(tools=native + remote, tool_executor=dispatch, **kwargs)
 
 
+def load_cascaded_env(working_dir: Path | None = None) -> None:
+    """Carga variables de entorno en cascada: ~/.harness/.env primero, luego .env local con precedencia."""
+    global_env = Path.home() / ".harness" / ".env"
+    if global_env.is_file():
+        load_dotenv(global_env, override=False)
+    base = (working_dir or Path.cwd()).resolve()
+    local_env = base / ".env"
+    if local_env.is_file():
+        load_dotenv(local_env, override=True)
+    else:
+        load_dotenv()
+
+
 def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
     """Inicia el bucle REPL interactivo con tolerancia a entorno sin API."""
-    load_dotenv()
     working_dir = (cwd or Path.cwd()).resolve()
+    load_cascaded_env(working_dir)
 
     # Cargar memoria persistente de modelos sin asumir proveedor por defecto
     memory = load_model_memory(working_dir / ".harness_models.json")
@@ -521,6 +547,7 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
     session_state: dict[str, Any] = {
         "id": f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     }
+    session_approved_targets: set[str] = set()
 
     def on_step(current: int, total: int) -> None:
         if current > 1:
@@ -594,6 +621,7 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
                 model=active_model,
                 base_dir=working_dir,
                 on_step=on_step,
+                session_approved_targets=session_approved_targets,
             )
             save_session_history(conversation_history, base_dir=working_dir)
             save_session_record(
@@ -615,8 +643,7 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Función principal de ejecución."""
-    load_dotenv(Path.cwd() / ".env")
-    load_dotenv()
+    load_cascaded_env()
     args = parse_args(argv)
 
     if args.prompt:

@@ -21,4 +21,7 @@ jarvis = "main:main"
 
 [tool.setuptools]
 py-modules = ["main"]
-packages = ["harness"]
+packages = ["harness", "harness.data"]
+
+[tool.setuptools.package-data]
+harness = ["data/*.json"]

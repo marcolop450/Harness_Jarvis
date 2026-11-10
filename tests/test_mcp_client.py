@@ -35,7 +35,10 @@ class MCPClientTests(unittest.TestCase):
     def test_config_portable_and_missing(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
-            self.assertEqual(load_config(base), [])
+            self.assertEqual(load_config(base, fallback=False), [])
+            # Con resolución en cascada, carpetas vírgenes obtienen los servidores por defecto
+            cascade_configs = load_config(base, fallback=True)
+            self.assertGreaterEqual(len(cascade_configs), 1)
             (base / "mcp.json").write_text(json.dumps({"mcpServers": {"fetch": {
                 "command": "${python}", "args": ["-m", "mcp_server_fetch"], "allowed_tools": ["fetch"]}}}))
             config = load_config(base)[0]
@@ -137,7 +140,35 @@ class MCPClientTests(unittest.TestCase):
         self.assertEqual(len(bounded_text("x" * 5000)), 4000)
         self.assertIn("truncada", bounded_text("x" * 5000))
         with tempfile.TemporaryDirectory() as folder, MCPManager(Path(folder)) as manager:
-            self.assertIn("no disponible", manager.execute("mcp_fetch__fetch", {}))
+            self.assertIn("no disponible", manager.execute("mcp_inexistente__herramienta", {}))
+
+    def test_graceful_degradation_when_server_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            (base / "mcp.json").write_text(json.dumps({"mcpServers": {
+                "fetch": {"command": "${python}", "args": ["-m", "mcp_server_fetch"], "allowed_tools": ["fetch"]},
+                "git": {"command": "${python}", "args": ["-m", "nonexistent_mcp_module"], "allowed_tools": ["git_status"]}
+            }}))
+            with MCPManager(base) as manager:
+                def mock_conn(config, ws):
+                    if config.name == "git":
+                        conn = Connection(config, ws)
+                        conn.status = "error"
+                        conn.error = "Modulo no existe"
+                        conn.start = lambda: conn
+                        return conn
+                    else:
+                        conn = Connection(config, ws)
+                        conn.status = "conectado"
+                        conn.catalog = {"mcp_fetch__fetch": {"type": "function", "function": {"name": "mcp_fetch__fetch", "parameters": {}}}}
+                        conn.start = lambda: conn
+                        return conn
+
+                with patch("harness.mcp_client.Connection", side_effect=mock_conn):
+                    defs = manager.definitions()
+                    self.assertEqual(len(defs), 1)
+                    self.assertEqual(defs[0]["function"]["name"], "mcp_fetch__fetch")
+                    self.assertEqual(manager.connections["git"].status, "error")
 
 
 if __name__ == "__main__":

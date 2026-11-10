@@ -11,6 +11,7 @@ from concurrent.futures import Future
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -23,6 +24,8 @@ from jsonschema import Draft202012Validator
 from mcp import Client, StdioServerParameters, stdio_client
 
 from harness.mcp_policy import ALLOWED_TOOLS, filter_result, prepare_call, validate_public_url
+
+logger = logging.getLogger("harness.mcp_client")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -53,14 +56,65 @@ class ServerConfig:
     timeout: float = 30.0
 
 
-def load_config(workspace: Path, project: Path = PROJECT_ROOT) -> list[ServerConfig]:
-    path = workspace / "mcp.json"
-    if not path.exists():
+def get_global_harness_dir() -> Path:
+    """Retorna la ruta al directorio global de usuario ~/.harness/."""
+    return Path.home() / ".harness"
+
+
+def get_default_mcp_template() -> str:
+    """Retorna el contenido de la plantilla predeterminada mcp.json empaquetada."""
+    import pkgutil
+    try:
+        data = pkgutil.get_data("harness", "data/default_mcp.json")
+        if data:
+            return data.decode("utf-8")
+    except Exception:
+        pass
+    candidate = PROJECT_ROOT / "mcp.json"
+    if candidate.exists():
+        return candidate.read_text(encoding="utf-8")
+    return "{}"
+
+
+def resolve_mcp_config_content(workspace: Path) -> str:
+    """Resuelve el contenido JSON de configuración MCP en cascada:
+    1. Local en workspace/mcp.json si existe.
+    2. Global en ~/.harness/mcp.json si existe.
+    3. Auto-inicialización de ~/.harness/mcp.json desde la plantilla empaquetada.
+    """
+    local_path = workspace / "mcp.json"
+    if local_path.is_file():
+        if local_path.is_symlink() or local_path.resolve().parent != workspace.resolve():
+            raise ValueError("mcp.json debe pertenecer al espacio de trabajo.")
+        return local_path.read_text(encoding="utf-8")
+
+    global_dir = get_global_harness_dir()
+    global_path = global_dir / "mcp.json"
+    if global_path.is_file():
+        return global_path.read_text(encoding="utf-8")
+
+    template = get_default_mcp_template()
+    if template.strip() and template.strip() != "{}":
+        try:
+            global_dir.mkdir(parents=True, exist_ok=True)
+            global_path.write_text(template, encoding="utf-8")
+        except Exception:
+            pass
+        return template
+
+    return "{}"
+
+
+def load_config(workspace: Path, project: Path = PROJECT_ROOT, fallback: bool = True) -> list[ServerConfig]:
+    if not fallback:
+        local_path = workspace / "mcp.json"
+        if not local_path.is_file():
+            return []
+    content = resolve_mcp_config_content(workspace)
+    if not content.strip() or content.strip() == "{}":
         return []
-    if path.is_symlink() or path.resolve().parent != workspace.resolve():
-        raise ValueError("mcp.json debe pertenecer al espacio de trabajo.")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    servers = data["mcpServers"]
+    data = json.loads(content)
+    servers = data.get("mcpServers", {})
     if not isinstance(servers, dict):
         raise ValueError("mcpServers debe ser un objeto.")
     node = project / "node_modules/node/bin" / ("node.exe" if os.name == "nt" else "node")
@@ -143,7 +197,10 @@ class Connection:
     def start(self):
         self.thread.start()
         try:
-            self.ready.result(timeout=self.config.timeout + 10)
+            res = self.ready.result(timeout=self.config.timeout + 10)
+            if not res or self.status != "conectado":
+                self.status = "error"
+                self.close()
         except Exception as exc:
             self.status, self.error = "error", clean_error(exc)
             self.close()
@@ -251,18 +308,31 @@ class MCPManager:
             configs = load_config(self.workspace)
         except Exception as exc:
             self.config_error = clean_error(exc)
+            logger.warning("Error en configuración MCP: %s. Continuando con herramientas nativas.", self.config_error)
             return
-        try:
-            for config in configs:
+        for config in configs:
+            try:
                 connection = Connection(config, self.workspace)
                 self.connections[config.name] = connection
                 connection.start()
-        except BaseException:
-            self.close()
-            raise
+                if connection.status != "conectado":
+                    logger.warning(
+                        "Servidor MCP '%s' no disponible: %s. Continuando con herramientas nativas.",
+                        config.name, connection.error or "fallo al iniciar"
+                    )
+            except Exception as exc:
+                err = clean_error(exc)
+                logger.warning(
+                    "Excepción al iniciar servidor MCP '%s': %s. Continuando con herramientas nativas.",
+                    config.name, err
+                )
 
     def definitions(self):
-        self.start()
+        try:
+            self.start()
+        except Exception as exc:
+            logger.warning("Fallo al iniciar servidores MCP: %s. Continuando con herramientas nativas.", exc)
+            return []
         return [definition for conn in self.connections.values() if conn.status == "conectado"
                 for definition in conn.catalog.values()]
 

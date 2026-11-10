@@ -22,7 +22,7 @@ El módulo guardrails SHALL validar que toda ruta destino resida estrictamente d
 - **THEN** se rechaza la ejecución y se notifica que la ruta está fuera del espacio autorizado
 
 ### Requirement: Confirmación interactiva para operaciones destructivas
-Las herramientas clasificadas como CONFIRM (write_file, edit_file, run_command) SHALL solicitar aprobación interactiva mediante [s/n/a] al usuario, permitiendo autorizar individualmente, rechazar o autorizar en lote ('a') todas las acciones del turno actual para evitar confirmaciones repetitivas.
+Las herramientas clasificadas como Nivel 1 (escrituras) o Nivel 2 (comandos fuera de whitelist) SHALL solicitar aprobación interactiva mediante [s/n/a] al usuario, permitiendo autorizar individualmente, rechazar o autorizar en lote ('a') el archivo durante toda la sesión activa, ejecutando automáticamente comandos seguros sin operadores de encadenamiento.
 
 #### Scenario: Usuario autoriza la operación
 - **GIVEN** una llamada a write_file o run_command pendiente de confirmación
@@ -43,6 +43,16 @@ Las herramientas clasificadas como CONFIRM (write_file, edit_file, run_command) 
 - **GIVEN** una operación de escritura o modificación sobre un archivo
 - **WHEN** el usuario responde con la opción 'a' o 'all' (autorizar todo)
 - **THEN** el sistema autoriza la operación y recuerda la aprobación para las subsiguientes modificaciones del mismo archivo durante el turno en curso sin volver a interrumpir
+
+#### Scenario: Autorización persistente durante toda la sesión activa
+- **GIVEN** un archivo autorizado previamente con la opción 'a'
+- **WHEN** el modelo ejecuta nuevas escrituras sobre el mismo archivo en turnos posteriores de la misma sesión
+- **THEN** el sistema autoriza la operación automáticamente sin volver a interrumpir al usuario
+
+#### Scenario: Ejecución automática de comandos seguros en whitelist sin encadenamiento
+- **GIVEN** un comando de consola que coincide con un prefijo seguro (pytest, git diff, ruff) y no contiene operadores de shell (&&, ;, |, >, <)
+- **WHEN** se evalúa el comando en los guardrails
+- **THEN** se clasifica como seguro y se ejecuta sin solicitar confirmación interactiva
 
 ### Requirement: Políticas MCP locales obligatorias
 Jarvis SHALL autorizar herramientas y validar argumentos localmente sin confiar en anotaciones remotas; Git solo permite lectura del repositorio activo y Filesystem solo rutas autorizadas sin secretos.

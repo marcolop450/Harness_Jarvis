@@ -30,7 +30,7 @@ La interfaz CLI SHALL permitir al usuario consultar y cambiar el proveedor o mod
 - **THEN** el sistema actualiza el proveedor y modelo para las consultas subsiguientes y notifica el cambio
 
 ### Requirement: Persistencia y memoria de modelos
-El sistema SHALL persistir en un archivo de configuración local (.harness_models.json) los modelos registrados por el usuario y la última configuración activa, sin incluir modelos de prueba predeterminados quemados en el sistema, permitiendo agregar y eliminar modelos explícitamente.
+El sistema SHALL persistir en un archivo de configuración local o en el directorio global del usuario (`~/.harness/models.json`) los modelos registrados y la selección activa, con precedencia de la configuración del workspace local si está presente.
 
 #### Scenario: Registro y persistencia de nuevo modelo
 - **GIVEN** una sesión activa en la terminal
@@ -46,6 +46,11 @@ El sistema SHALL persistir en un archivo de configuración local (.harness_model
 - **GIVEN** una sesión previa que registró modelos o configuraciones
 - **WHEN** el usuario inicia una nueva sesión de la CLI
 - **THEN** el sistema recupera la lista de modelos registrados por el usuario y restaura la selección activa
+
+#### Scenario: Precedencia de configuración en cascada
+- **GIVEN** un entorno con configuración global en `~/.harness/` y configuración local en el workspace
+- **WHEN** se inicia Jarvis en ese workspace
+- **THEN** la configuración local tiene precedencia sobre la global para esa sesión
 
 ### Requirement: Memoria de conversación persistente por carpeta
 El sistema SHALL persistir el historial de mensajes de la sesión en un archivo de memoria dentro del espacio de trabajo (.harness_session.json) y permitir su vaciado mediante el comando /reset.

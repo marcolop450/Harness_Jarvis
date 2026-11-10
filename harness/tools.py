@@ -42,21 +42,57 @@ TOOL_RISK_MAP: dict[str, RiskLevel] = {
 }
 
 
-def truncate_output(text: str, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> str:
-    """Trunca el texto si supera max_chars y anexa un pie informativo explicativo."""
+def smart_truncate(
+    text: str,
+    head_chars: int = 1000,
+    tail_chars: int = 3000,
+    max_chars: int = MAX_TOOL_OUTPUT_CHARS,
+) -> str:
+    """Aplica truncado inteligente Head+Tail preservando el contexto inicial y trazas finales."""
     if len(text) <= max_chars:
         return text
-    suffix = "\n[Salida truncada]"
-    return text[:max(0, max_chars - len(suffix))] + suffix[:max_chars]
+
+    marker_fmt = "\n\n[Salida truncada: ... {count} caracteres omitidos por el arnés para proteger la ventana de contexto ...]\n\n"
+    est_marker_len = len(marker_fmt.format(count=len(text)))
+    avail = max_chars - est_marker_len
+
+    if avail <= 0:
+        suffix = "\n[Salida truncada]"
+        return text[:max(0, max_chars - len(suffix))] + suffix[:max_chars]
+
+    # Presupuesto para cabeza y cola según parámetros
+    h_budget = min(head_chars, int(avail * (head_chars / (head_chars + tail_chars))))
+    t_budget = min(tail_chars, avail - h_budget)
+
+    head = text[:h_budget]
+    tail = text[-t_budget:] if t_budget > 0 else ""
+    omitted = len(text) - len(head) - len(tail)
+    marker = marker_fmt.format(count=omitted)
+
+    result = f"{head}{marker}{tail}"
+    if len(result) > max_chars:
+        result = result[:max_chars]
+    return result
+
+
+def truncate_output(text: str, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> str:
+    """Trunca el texto si supera max_chars aplicando smart_truncate."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars < 200:
+        suffix = "\n[Salida truncada]"
+        return text[:max(0, max_chars - len(suffix))] + suffix[:max_chars]
+    return smart_truncate(text, max_chars=max_chars)
 
 
 def tool_read_file(
     path: str,
     start_line: int | None = None,
     end_line: int | None = None,
+    line_numbers: bool = False,
     base_dir: Path | None = None,
 ) -> str:
-    """Lee el contenido de un archivo en texto plano con soporte de rango de líneas."""
+    """Lee el contenido de un archivo en texto plano con soporte de rango de líneas y prefijos [L1]."""
     safe_path = validate_safe_path(path, base_dir)
     if not safe_path.exists():
         return f"Error: El archivo '{path}' no existe."
@@ -77,8 +113,13 @@ def tool_read_file(
         if s > e:
             return f"Error: start_line ({s}) no puede ser mayor que end_line ({e})."
         selected = lines[s - 1 : e]
-        numbered = [f"{s + idx}: {line}" for idx, line in enumerate(selected)]
+        if line_numbers:
+            numbered = [f"[L{s + idx}] {line}" for idx, line in enumerate(selected)]
+        else:
+            numbered = [f"{s + idx}: {line}" for idx, line in enumerate(selected)]
         output = "".join(numbered)
+    elif line_numbers:
+        output = "".join(f"[L{idx + 1}] {line}" for idx, line in enumerate(lines))
     else:
         output = "".join(lines)
 
@@ -125,17 +166,24 @@ def tool_edit_file(
     except Exception as exc:
         return f"Error al leer '{path}': {exc}"
 
-    if target not in content:
+    occurrences = content.count(target)
+    if occurrences == 0:
         return (
             f"Error al editar '{path}': No se encontró la cadena 'target'. "
-            f"Verifica que el texto y los espacios coincidan exactamente."
+            f"Verifica que el texto y los espacios coincidan exactamente. "
+            f"Sugerencia: Usa 'read_file' con line_numbers=True para verificar el texto exacto."
+        )
+    if occurrences > 1:
+        return (
+            f"Error al editar '{path}': La cadena 'target' aparece {occurrences} veces en el archivo. "
+            f"El reemplazo debe ser unívoco. Incluye más líneas o contexto en 'target' para resolver la ambigüedad."
         )
 
     confirmer = confirm_fn or (lambda desc, det: confirm_action(desc, det))
     if not confirmer("Editar archivo", f"Ruta: {path}\nReemplazo de '{target[:50]}...'"):
         return f"Acción cancelada: El usuario denegó la edición en '{path}'."
 
-    new_content = content.replace(target, replacement)
+    new_content = content.replace(target, replacement, 1)
     try:
         safe_path.write_text(new_content, encoding="utf-8")
         return f"Archivo '{path}' editado exitosamente."
@@ -367,6 +415,7 @@ def _execute_tool(name, arguments, base_dir=None, confirm_fn=None) -> str:
                 path=args.get("path", ""),
                 start_line=args.get("start_line"),
                 end_line=args.get("end_line"),
+                line_numbers=bool(args.get("line_numbers", False)),
                 base_dir=base_dir,
             )
         elif name == "write_file":
@@ -437,6 +486,10 @@ TOOLS_DEFINITIONS: list[dict[str, Any]] = [
                     "end_line": {
                         "type": "integer",
                         "description": "Número de línea final a leer (base 1, inclusivo).",
+                    },
+                    "line_numbers": {
+                        "type": "boolean",
+                        "description": "Si es True, prefija cada línea con [L<num>] para facilitar la edición precisa.",
                     },
                 },
                 "required": ["path"],

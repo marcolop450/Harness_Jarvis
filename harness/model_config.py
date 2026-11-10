@@ -21,10 +21,22 @@ SESSIONS_DIR_NAME: str = ".harness_sessions"
 DEFAULT_MODELS: dict[str, list[str]] = {}
 
 
+def get_global_harness_dir() -> Path:
+    """Retorna la ruta al directorio de configuración global del usuario ~/.harness/."""
+    return Path.home() / ".harness"
+
+
 def get_default_config_path(base_dir: Path | None = None) -> Path:
-    """Retorna la ruta hacia el archivo de configuración persistente."""
-    base = (base_dir or Path.cwd()).resolve()
-    return base / DEFAULT_CONFIG_FILE
+    """Retorna la ruta hacia el archivo de configuración persistente con soporte en cascada."""
+    if base_dir is not None:
+        return (base_dir / DEFAULT_CONFIG_FILE).resolve()
+    local_candidate = (Path.cwd() / DEFAULT_CONFIG_FILE).resolve()
+    if local_candidate.exists():
+        return local_candidate
+    global_candidate = (get_global_harness_dir() / DEFAULT_CONFIG_FILE).resolve()
+    if global_candidate.exists():
+        return global_candidate
+    return local_candidate
 
 
 def get_session_history_path(base_dir: Path | None = None) -> Path:
@@ -181,7 +193,7 @@ def load_session_by_id(session_id: str, base_dir: Path | None = None) -> dict[st
 
 
 def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
-    """Carga la configuración y memoria de modelos desde el archivo JSON.
+    """Carga la configuración y memoria de modelos en cascada (local -> global).
 
     Si no existe o está corrupto, inicializa con valores limpios sin asumir proveedor.
     """
@@ -196,6 +208,16 @@ def load_model_memory(config_path: Path | None = None) -> dict[str, Any]:
                     data["active_provider"] = None
                 if "active_model" not in data:
                     data["active_model"] = None
+                return data
+        except Exception:
+            pass
+
+    # Fallback global si la ruta local no existe
+    global_path = (get_global_harness_dir() / DEFAULT_CONFIG_FILE).resolve()
+    if path.resolve() != global_path and global_path.exists():
+        try:
+            data = json.loads(global_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
                 return data
         except Exception:
             pass
@@ -403,7 +425,32 @@ def save_api_key_to_env(
     if not found:
         lines.append(f"{var_name}={cleaned_key}")
 
-    target_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        target_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+    # Si se guarda en la ubicación estándar por defecto, respaldar también en ~/.harness/.env
+    if env_path is None:
+        try:
+            g_dir = get_global_harness_dir()
+            g_dir.mkdir(parents=True, exist_ok=True)
+            g_env = g_dir / ".env"
+            g_lines: list[str] = []
+            g_found = False
+            if g_env.exists():
+                g_content = g_env.read_text(encoding="utf-8")
+                for line in g_content.splitlines():
+                    if line.startswith(f"{var_name}=") or line.startswith(f"{var_name} ="):
+                        g_lines.append(f"{var_name}={cleaned_key}")
+                        g_found = True
+                    else:
+                        g_lines.append(line)
+            if not g_found:
+                g_lines.append(f"{var_name}={cleaned_key}")
+            g_env.write_text("\n".join(g_lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
 
 def build_workspace_system_prompt(

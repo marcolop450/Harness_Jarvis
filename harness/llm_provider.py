@@ -7,8 +7,11 @@ de modelos de lenguaje (OpenAI, Gemini, Groq, OpenRouter, Ollama).
 from __future__ import annotations
 import json
 import os
+import random
+import re
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -121,19 +124,69 @@ def resolve_provider(provider_name: str | None = None) -> ProviderConfig:
     )
 
 
-def normalize_arguments(raw_args: Any) -> dict[str, Any]:
-    """Parsea de forma segura los argumentos de un tool_call a un diccionario."""
+def repair_json_arguments(raw_args: Any) -> dict[str, Any]:
+    """Sanea y repara argumentos JSON emitidos por modelos de lenguaje."""
     if isinstance(raw_args, dict):
         return raw_args
     if not isinstance(raw_args, str) or not raw_args.strip():
         return {}
+
+    text = raw_args.strip()
+
+    # 1. Si está envuelto en bloques markdown ```json ... ``` o ``` ... ```
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2:
+            first_line = lines[0].strip()
+            if first_line.startswith("```"):
+                if lines[-1].strip() == "```":
+                    text = "\n".join(lines[1:-1]).strip()
+                else:
+                    text = "\n".join(lines[1:]).strip()
+
+    # 2. Intentar parseo directo
     try:
-        parsed = json.loads(raw_args)
+        parsed = json.loads(text)
         if isinstance(parsed, dict):
             return parsed
         return {"value": parsed}
-    except Exception as exc:
-        return {"raw_arguments": raw_args, "parse_error": str(exc)}
+    except Exception:
+        pass
+
+    # 3. Remover comas finales (trailing commas) antes de } o ]
+    cleaned = re.sub(r",\s*([}\]])", r"\1", text)
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    except Exception:
+        pass
+
+    # 4. Si el modelo incluyó texto explicativo antes o después, extraer el primer objeto {...}
+    match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+    if match:
+        candidate = match.group(1)
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            cand_clean = re.sub(r",\s*([}\]])", r"\1", candidate)
+            try:
+                parsed = json.loads(cand_clean)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+
+    # 5. Si sigue sin parsear, retornar diccionario descriptivo con error estructurado
+    return {"raw_arguments": raw_args, "parse_error": "JSON malformado no recuperable"}
+
+
+def normalize_arguments(raw_args: Any) -> dict[str, Any]:
+    """Parsea y auto-repara de forma segura los argumentos de un tool_call a un diccionario."""
+    return repair_json_arguments(raw_args)
 
 
 def format_clean_api_error(error: Exception) -> str:
@@ -189,7 +242,10 @@ def call_llm(
     provider_name: str | None = None,
     model: str | None = None,
     client: OpenAI | None = None,
-    max_tokens: int | None = 1500,
+    max_tokens: int | None = 4096,
+    max_retries: int = 5,
+    base_delay: float = 2.0,
+    sleep_fn: Callable[[float], None] | None = None,
 ) -> NormalizedResponse:
     """Ejecuta una llamada al modelo de lenguaje y retorna una respuesta normalizada."""
     config = resolve_provider(provider_name)
@@ -212,10 +268,44 @@ def call_llm(
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
-    try:
-        response = active_client.chat.completions.create(**kwargs)
-    except Exception as exc:
-        raise RuntimeError(format_clean_api_error(exc)) from exc
+    sleeper = sleep_fn or time.sleep
+    response = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = active_client.chat.completions.create(**kwargs)
+            break
+        except Exception as exc:
+            err_str = str(exc)
+            status_code = getattr(exc, "status_code", None)
+            is_429 = status_code == 429 or "429" in err_str or "rate limit" in err_str.lower()
+
+            if is_429 and attempt < max_retries:
+                retry_after = None
+                resp = getattr(exc, "response", None)
+                if resp is not None and hasattr(resp, "headers"):
+                    h_val = resp.headers.get("retry-after")
+                    if h_val:
+                        try:
+                            retry_after = float(h_val)
+                        except (ValueError, TypeError):
+                            pass
+
+                if retry_after is not None and retry_after > 0:
+                    delay = retry_after
+                else:
+                    jitter = random.uniform(0.1, 1.0)
+                    delay = (base_delay * (2 ** attempt)) + jitter
+                    delay = min(delay, 60.0)
+
+                print(
+                    f"\n[Aviso 429]: Límite de cuota alcanzado. Esperando {delay:.1f}s antes de reintentar (intento {attempt + 1}/{max_retries})...",
+                    flush=True,
+                )
+                sleeper(delay)
+                continue
+
+            raise RuntimeError(format_clean_api_error(exc)) from exc
 
     choice = response.choices[0]
     msg = choice.message

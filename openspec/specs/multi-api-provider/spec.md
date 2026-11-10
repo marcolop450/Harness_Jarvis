@@ -19,7 +19,7 @@ El módulo llm_provider SHALL instanciar un cliente compatible con la API de Ope
 - **THEN** el adaptador configura la base_url correspondiente a Gemini y utiliza GEMINI_API_KEY
 
 ### Requirement: Normalización de respuestas y tool_calls
-El adaptador SHALL procesar la respuesta cruda del modelo y transformarla en una estructura uniforme con contenido textual y lista normalizada de tool_calls.
+El adaptador SHALL procesar la respuesta cruda del modelo y transformarla en una estructura uniforme con contenido textual y lista normalizada de tool_calls, auto-reparando JSONs mal formados o retornando un error estructurado no fatal al bucle de ejecución.
 
 #### Scenario: Respuesta estándar de texto
 - **GIVEN** una respuesta del modelo sin llamadas a herramientas
@@ -31,8 +31,13 @@ El adaptador SHALL procesar la respuesta cruda del modelo y transformarla en una
 - **WHEN** el adaptador procesa los tool_calls
 - **THEN** devuelve los tool_calls normalizados con id, name y arguments parseados como diccionario
 
+#### Scenario: Auto-reparación de JSON defectuoso en llamadas a herramientas
+- **GIVEN** una llamada a función con argumentos JSON que contienen comillas sin escapar o sintaxis imperfecta
+- **WHEN** el adaptador intenta deserializar los argumentos
+- **THEN** aplica una rutina de saneamiento y reparación de JSON retornando los argumentos reparados o un error descriptivo estructurado sin terminar el proceso
+
 ### Requirement: Manejo de errores de conexión y credenciales
-El adaptador SHALL capturar fallos de autenticación, límites de cuota (Rate Limit 429) o problemas de red del proveedor y transformarlos en mensajes de error humanos limpios y categorizados por código de estado, sin volcar diccionarios JSON crudos.
+El adaptador SHALL capturar fallos de autenticación, límites de cuota (Rate Limit 429) o problemas de red del proveedor, aplicando reintentos con Exponential Backoff ante errores 429 y transformando fallos definitivos en mensajes limpios de una línea.
 
 #### Scenario: Clave de API no configurada
 - **GIVEN** un entorno donde no hay variables de clave para el proveedor solicitado
@@ -41,8 +46,8 @@ El adaptador SHALL capturar fallos de autenticación, límites de cuota (Rate Li
 
 #### Scenario: Exceso de cuota o límite de tokens (Error 429)
 - **GIVEN** una llamada al modelo rechazada por límite de tokens por minuto (OTPM/TPM)
-- **WHEN** el adaptador captura la excepción de la API
-- **THEN** formatea un mensaje limpio indicando el código 429 y sugiriendo esperar o cambiar de modelo con /model, sin exponer JSONs crudos
+- **WHEN** el adaptador captura el error 429
+- **THEN** aplica una espera exponencial con aviso visual en consola y reintenta la llamada antes de fallar de manera definitiva
 
 #### Scenario: Fallo de autenticación o modelo no disponible (401 / 404)
 - **GIVEN** una respuesta de error 401 o 404 por parte del proveedor externo
