@@ -316,9 +316,12 @@ class MCPManager:
                 self.connections[config.name] = connection
                 connection.start()
                 if connection.status != "conectado":
+                    err_msg = connection.error or "fallo al iniciar"
+                    if config.name == "git" and not (self.workspace / ".git").is_dir():
+                        err_msg = f"{err_msg} (la carpeta no es un repositorio Git; usa 'git init' si deseas habilitarlo)"
                     logger.warning(
                         "Servidor MCP '%s' no disponible: %s. Continuando con herramientas nativas.",
-                        config.name, connection.error or "fallo al iniciar"
+                        config.name, err_msg
                     )
             except Exception as exc:
                 err = clean_error(exc)
@@ -370,7 +373,10 @@ class MCPManager:
             return "[MCP]: Sin servidores configurados en mcp.json."
         lines = []
         for name, conn in self.connections.items():
-            lines.append(f"{name}: {conn.status}" + (f" — {conn.error}" if conn.error else ""))
+            err_msg = conn.error or ""
+            if name == "git" and conn.status != "conectado" and not (self.workspace / ".git").is_dir():
+                err_msg = f"{err_msg} (la carpeta no es un repositorio Git; usa 'git init' si deseas habilitarlo)"
+            lines.append(f"{name}: {conn.status}" + (f" — {err_msg}" if err_msg else ""))
             lines.extend(f"  {tool}" for tool in conn.catalog)
         return "\n".join(lines)
 

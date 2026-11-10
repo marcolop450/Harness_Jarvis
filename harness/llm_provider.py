@@ -360,8 +360,12 @@ def call_llm(
             )
         )
 
+    raw_content = getattr(msg, "content", None)
+    if not raw_content and hasattr(msg, "reasoning_content") and getattr(msg, "reasoning_content", None):
+        raw_content = getattr(msg, "reasoning_content", None)
+
     return NormalizedResponse(
-        content=getattr(msg, "content", None),
+        content=raw_content,
         tool_calls=normalized_tool_calls,
         finish_reason=choice.finish_reason or "stop",
     )
