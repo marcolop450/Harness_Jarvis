@@ -544,8 +544,6 @@ def print_mcp_event(server: str, tool: str, status: str) -> None:
 def run_turn(manager: MCPManager, **kwargs):
     """Mismo despacho en REPL y -p; las herramientas MCP nunca usan fallback."""
     remote = manager.definitions()
-    if manager.config_error or any(c.status == "error" for c in manager.connections.values()):
-        print(manager.report(), file=sys.stderr)
     native = get_tools_definitions()
 
     session_set = kwargs.get("session_approved_targets")
