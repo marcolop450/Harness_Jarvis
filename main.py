@@ -52,11 +52,15 @@ def has_valid_key_for_provider(provider: str | None) -> bool:
     if not provider:
         return False
     prov = provider.lower()
-    if prov == "ollama":
+    if prov in ("ollama", "lmstudio", "local", "custom"):
         return True
     info = SUPPORTED_PROVIDERS.get(prov)
     if not info:
         return False
+    # Si tiene una URL local configurada (localhost, 127.0.0.1, 0.0.0.0), no requiere API key de pago
+    base_url = os.getenv(f"{prov.upper()}_BASE_URL", "")
+    if any(loc in base_url for loc in ("localhost", "127.0.0.1", "0.0.0.0")):
+        return True
     return bool(os.getenv(info["env_key"]))
 
 
@@ -591,6 +595,12 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
     raw_model = model or memory.get("active_model")
     active_model = raw_model if raw_model else None
 
+    # Si se cargó un proveedor de nube que no tiene clave configurada en este entorno,
+    # no activarlo de forma fantasma: dejarlo como [sin configurar] para no confundir al usuario
+    if active_provider and not provider_name and not has_valid_key_for_provider(active_provider):
+        active_provider = None
+        active_model = None
+
     if active_provider and not active_model:
         info = SUPPORTED_PROVIDERS.get(active_provider)
         if info:
@@ -630,14 +640,20 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
         if not user_input:
             continue
 
-        if user_input.lower() in ("exit", "quit"):
+        # Sanitizar si el usuario pegó el prefijo del prompt accidentalmente (ej: "jarvis> /cmd" o "> /cmd")
+        cleaned_input = user_input
+        for pfx in ("jarvis>", "jarvis >", ">", "$"):
+            if cleaned_input.lower().startswith(pfx):
+                cleaned_input = cleaned_input[len(pfx):].strip()
+
+        if cleaned_input.lower() in ("exit", "quit"):
             print("¡Hasta luego!")
             break
 
         # Manejo de comandos slash
-        if user_input.startswith("/"):
+        if cleaned_input.startswith("/"):
             active_provider, active_model, handled = handle_slash_command(
-                user_input,
+                cleaned_input,
                 active_provider,
                 active_model,
                 working_dir,
@@ -653,9 +669,10 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
             print(
                 "\n[Aviso]: No tienes ningún proveedor ni modelo configurado todavía.\n"
                 "  - Consulta la guía de inicio con: /guide\n"
-                "  - Si tienes una clave API:        /key <proveedor> <tu_clave>\n"
-                "  - O agrega tu modelo con:         /model add <proveedor> <nombre_modelo>\n"
-                "  - O si usas Ollama local:         /model add ollama qwen2.5-coder:7b"
+                "  - Si usas Ollama local:           /model add ollama qwen2.5-coder:7b\n"
+                "  - Si usas LM Studio local:        /model add lmstudio default\n"
+                "  - O con tu clave de API de nube:  /key <proveedor> <tu_clave>\n"
+                "  - O agrega cualquier modelo con:  /model add <proveedor> <nombre_modelo>"
             )
             continue
 
@@ -664,7 +681,8 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
             print(
                 f"\n[Aviso]: No se ha detectado una clave de API para el proveedor '{active_provider.upper()}'.\n"
                 f"  - Configura tu clave en la terminal con: /key {active_provider} <tu_clave>\n"
-                f"  - O agrega un modelo local Ollama con:  /model add ollama qwen2.5-coder:7b"
+                f"  - O agrega un modelo local Ollama con:  /model add ollama qwen2.5-coder:7b\n"
+                f"  - O cambia la dirección/endpoint con:    /endpoint {active_provider} <url>"
             )
             continue
 
@@ -674,7 +692,7 @@ def _run_repl(provider_name, model, system_prompt, cwd, manager) -> int:
 
         try:
             reply, conversation_history = run_turn(manager,
-                prompt=user_input,
+                prompt=cleaned_input,
                 system_prompt=full_system_prompt,
                 messages=conversation_history,
                 provider_name=active_provider,

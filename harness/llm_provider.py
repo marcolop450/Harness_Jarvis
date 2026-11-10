@@ -65,34 +65,60 @@ SUPPORTED_PROVIDERS: dict[str, dict[str, str]] = {
         "base_url": "https://openrouter.ai/api/v1",
         "default_model": "meta-llama/llama-3.3-70b-instruct",
     },
+    "deepseek": {
+        "env_key": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com/v1",
+        "default_model": "deepseek-chat",
+    },
     "ollama": {
         "env_key": "OLLAMA_API_KEY",
         "base_url": "http://localhost:11434/v1",
         "default_model": "qwen2.5-coder:7b",
     },
+    "lmstudio": {
+        "env_key": "LMSTUDIO_API_KEY",
+        "base_url": "http://localhost:1234/v1",
+        "default_model": "default",
+    },
+    "local": {
+        "env_key": "LOCAL_API_KEY",
+        "base_url": "http://localhost:1234/v1",
+        "default_model": "default",
+    },
+    "custom": {
+        "env_key": "CUSTOM_API_KEY",
+        "base_url": "http://localhost:8000/v1",
+        "default_model": "default",
+    },
 }
+
+LOCAL_PROVIDERS: set[str] = {"ollama", "lmstudio", "local", "custom"}
 
 
 def resolve_provider(provider_name: str | None = None) -> ProviderConfig:
     """Resuelve la configuración del proveedor por nombre o detección de entorno.
 
     Si no se especifica proveedor, evalúa HARNESS_PROVIDER o busca la primera
-    clave disponible entre GEMINI, GROQ, OPENROUTER y OPENAI.
+    clave disponible entre proveedores de nube.
     """
     target = (provider_name or os.getenv("HARNESS_PROVIDER") or "").strip().lower()
 
     if not target:
         # Autodetección según variables de entorno disponibles
         for prov, info in SUPPORTED_PROVIDERS.items():
-            if prov == "ollama":
+            if prov in LOCAL_PROVIDERS:
                 continue
             if os.getenv(info["env_key"]):
                 target = prov
                 break
         else:
-            # Si no hay claves de nube, revisar si se configuró OLLAMA_BASE_URL
+            # Si no hay claves de nube, revisar si se configuró URL local
             if os.getenv("OLLAMA_BASE_URL"):
                 target = "ollama"
+            elif os.getenv("LMSTUDIO_BASE_URL"):
+                target = "lmstudio"
+            elif os.getenv("LOCAL_BASE_URL"):
+                target = "local"
             else:
                 target = "gemini"  # Proveedor predeterminado de referencia
 
@@ -107,10 +133,17 @@ def resolve_provider(provider_name: str | None = None) -> ProviderConfig:
     base_url = os.getenv(f"{target.upper()}_BASE_URL", info["base_url"])
     api_key = os.getenv(env_key, "")
 
-    if target == "ollama" and not api_key:
-        api_key = "ollama"
+    is_local_endpoint = (
+        target in LOCAL_PROVIDERS
+        or "localhost" in base_url
+        or "127.0.0.1" in base_url
+        or "0.0.0.0" in base_url
+    )
 
-    if not api_key and target != "ollama":
+    if is_local_endpoint and not api_key:
+        api_key = "local"
+
+    if not api_key and not is_local_endpoint:
         raise ValueError(
             f"Clave de API no configurada para el proveedor '{target}'. "
             f"Por favor configure la variable de entorno {env_key}."

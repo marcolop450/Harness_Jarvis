@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from main import handle_slash_command, main, parse_args, print_banner
+from main import handle_slash_command, has_valid_key_for_provider, main, parse_args, print_banner
 
 
 class TestCLI(unittest.TestCase):
@@ -182,6 +182,7 @@ class TestCLI(unittest.TestCase):
             self.assertIn("Endpoint: http://vllm-server:8000/v1", buf4.getvalue())
 
     def test_repl_dynamic_prompt_contextual(self):
+        import os
         buf = io.StringIO()
         prompts_seen = []
 
@@ -189,12 +190,13 @@ class TestCLI(unittest.TestCase):
             prompts_seen.append(prompt)
             return "exit"
 
-        with patch("main.load_model_memory", return_value={"active_provider": "groq", "active_model": "llama-3.3"}):
-            with patch("builtins.input", side_effect=mock_input):
-                with patch("sys.stdout", buf):
-                    ret = main([])
+        with patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test"}):
+            with patch("main.load_model_memory", return_value={"active_provider": "groq", "active_model": "llama-3.3"}):
+                with patch("builtins.input", side_effect=mock_input):
+                    with patch("sys.stdout", buf):
+                        ret = main([])
         self.assertEqual(ret, 0)
-        self.assertTrue(any("⚡ groq:llama-3.3" in p for p in prompts_seen))
+        self.assertTrue(any("groq:llama-3.3" in p for p in prompts_seen))
 
     def test_handle_slash_command_guide_and_help(self):
         for cmd in ("/guide", "/guia", "/help", "/ayuda"):
@@ -326,6 +328,53 @@ class TestCLI(unittest.TestCase):
             self.assertTrue(handled)
             self.assertIn("Historial compactado exitosamente", buf.getvalue())
             self.assertEqual(len(history), 1)
+
+    def test_has_valid_key_for_provider_local_and_cloud(self):
+        import os
+        # Proveedores locales nunca requieren clave
+        self.assertTrue(has_valid_key_for_provider("ollama"))
+        self.assertTrue(has_valid_key_for_provider("lmstudio"))
+        self.assertTrue(has_valid_key_for_provider("local"))
+        self.assertTrue(has_valid_key_for_provider("custom"))
+
+        # Proveedor de nube con localhost configurado tampoco requiere clave
+        with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://localhost:1234/v1"}, clear=True):
+            self.assertTrue(has_valid_key_for_provider("openai"))
+
+        # Proveedor de nube sin clave y sin localhost retorna False
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(has_valid_key_for_provider("groq"))
+
+    def test_repl_strips_prompt_prefixes_for_slash_command(self):
+        buf = io.StringIO()
+        prompts = ["jarvis> /help", "exit"]
+
+        with patch("builtins.input", side_effect=prompts):
+            with patch("sys.stdout", buf):
+                ret = main([])
+        self.assertEqual(ret, 0)
+        self.assertIn("GUIA RAPIDA DE INICIO", buf.getvalue())
+
+    def test_repl_unconfigured_when_saved_cloud_provider_lacks_key(self):
+        import os
+        buf = io.StringIO()
+        prompts_seen = []
+
+        def mock_input(p):
+            prompts_seen.append(p)
+            return "exit"
+
+        env_copy = dict(os.environ)
+        env_copy.pop("GROQ_API_KEY", None)
+
+        with patch.dict(os.environ, env_copy, clear=True):
+            with patch("main.load_model_memory", return_value={"active_provider": "groq", "active_model": "llama-3.3"}):
+                with patch("builtins.input", side_effect=mock_input):
+                    with patch("sys.stdout", buf):
+                        ret = main([])
+        self.assertEqual(ret, 0)
+        # Debe arrancar en estado sin configurar, evitando modelos fantasmas sin clave
+        self.assertTrue(any("[sin configurar]" in p for p in prompts_seen))
 
 
 if __name__ == "__main__":

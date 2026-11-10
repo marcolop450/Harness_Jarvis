@@ -1,12 +1,12 @@
 # multi-api-provider Specification
 
 ## Purpose
-Provee un adaptador unificado compatible con el protocolo OpenAI Chat Completions para conectar múltiples proveedores (OpenAI, Gemini, Groq, OpenRouter, Ollama) y normalizar sus respuestas.
+Provee un adaptador unificado compatible con el protocolo OpenAI Chat Completions para conectar múltiples proveedores locales y en la nube (OpenAI, Gemini, Groq, OpenRouter, DeepSeek, Ollama, LM Studio, Local, Custom) y normalizar sus respuestas.
 
 ## Requirements
 
 ### Requirement: Configuración de proveedor y cliente unificado
-El módulo llm_provider SHALL instanciar un cliente compatible con la API de OpenAI resolviendo dinámicamente la base_url y la api_key correspondientes al proveedor seleccionado o detectado, soportando URLs base personalizadas por proveedor configuradas en memoria o entorno.
+El módulo llm_provider SHALL instanciar un cliente compatible con la API de OpenAI resolviendo dinámicamente la base_url y la api_key correspondientes al proveedor seleccionado o detectado, soportando proveedores locales (ollama, lmstudio, local, custom) sin requerir claves de API y permitiendo URLs base personalizadas.
 
 #### Scenario: Selección automática de proveedor según entorno
 - **GIVEN** que existe la variable de entorno GROQ_API_KEY pero ninguna otra clave
@@ -22,6 +22,16 @@ El módulo llm_provider SHALL instanciar un cliente compatible con la API de Ope
 - **GIVEN** una URL base configurada para un proveedor (ej. OLLAMA_BASE_URL=http://localhost:1234/v1)
 - **WHEN** se resuelve la configuración del proveedor
 - **THEN** el adaptador utiliza la URL personalizada en lugar del valor predeterminado permitiendo operar con cualquier puerto o servidor
+
+#### Scenario: Uso de proveedor local sin clave de API
+- **GIVEN** un proveedor local configurado ('ollama', 'lmstudio', 'local', 'custom' o base_url apuntando a localhost)
+- **WHEN** se resuelve la configuración del proveedor sin variable de entorno de clave
+- **THEN** el adaptador asigna una clave por defecto 'local' y no arroja error de autenticación
+
+#### Scenario: Soporte de proveedores adicionales (DeepSeek, LM Studio)
+- **GIVEN** una solicitud para utilizar un proveedor soportado ampliado (ej. 'deepseek' o 'lmstudio')
+- **WHEN** se inicializa el adaptador
+- **THEN** el cliente se conecta a la URL predeterminada o configurada del servicio con el modelo especificado
 
 ### Requirement: Normalización de respuestas y tool_calls
 El adaptador SHALL procesar la respuesta cruda del modelo y transformarla en una estructura uniforme con contenido textual y lista normalizada de tool_calls, auto-reparando JSONs mal formados o retornando un error estructurado no fatal al bucle de ejecución.

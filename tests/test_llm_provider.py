@@ -63,8 +63,32 @@ class TestResolveProvider(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             config = resolve_provider("ollama")
             self.assertEqual(config.name, "ollama")
-            self.assertEqual(config.api_key, "ollama")
+            self.assertEqual(config.api_key, "local")
             self.assertEqual(config.base_url, "http://localhost:11434/v1")
+
+    def test_resolve_lmstudio_and_local_without_key(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config_lm = resolve_provider("lmstudio")
+            self.assertEqual(config_lm.name, "lmstudio")
+            self.assertEqual(config_lm.api_key, "local")
+            self.assertEqual(config_lm.base_url, "http://localhost:1234/v1")
+
+            config_loc = resolve_provider("local")
+            self.assertEqual(config_loc.name, "local")
+            self.assertEqual(config_loc.api_key, "local")
+
+    def test_resolve_deepseek_with_key(self):
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek-123"}, clear=True):
+            config = resolve_provider("deepseek")
+            self.assertEqual(config.name, "deepseek")
+            self.assertEqual(config.api_key, "sk-deepseek-123")
+            self.assertEqual(config.base_url, "https://api.deepseek.com/v1")
+
+    def test_resolve_custom_endpoint_on_localhost_without_key(self):
+        with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://localhost:5000/v1"}, clear=True):
+            config = resolve_provider("openai")
+            self.assertEqual(config.api_key, "local")
+            self.assertEqual(config.base_url, "http://localhost:5000/v1")
 
     def test_resolve_missing_api_key_raises_error(self):
         with patch.dict(os.environ, {}, clear=True):
