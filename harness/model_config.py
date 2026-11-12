@@ -572,6 +572,12 @@ def build_workspace_system_prompt(
         "2. Si una herramienta devuelve 'Acción cancelada' o un error, NUNCA declares la tarea como completada. Informa honestamente al usuario que la acción no se ejecutó.\n"
         "3. Si no tienes certeza de la estructura actual, usa 'list_dir' o 'read_file' antes de emitir conclusiones."
     )
+    sections.append(
+        "--- DIRECTIVA DE ACCIÓN INMEDIATA (ANTI-PROCRASTINACIÓN) ---\n"
+        "Si el usuario solicita crear, editar, corregir o mejorar un archivo, INVOCA DE INMEDIATO 'write_file' o 'edit_file'. "
+        "Está terminantemente prohibido responder con promesas conversacionales ('Entendido, lo modifico...', 'Ahora sí lo hago...') "
+        "sin emitir la herramienta correspondiente en el mismo paso."
+    )
     return "\n\n".join(sections)
 
 

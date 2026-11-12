@@ -37,7 +37,7 @@ El sistema SHALL recibir la consulta del usuario, transferirla al bucle del agen
 - **THEN** el sistema envía la instrucción al bucle del agente y muestra la respuesta en pantalla
 
 ### Requirement: Comandos de control de sesión y contexto
-La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /clear, /reset y comandos de ayuda/guía (/guide, /guia, /help), mostrar el directorio de trabajo activo (cwd) y el modelo activo en un prompt dinámico, y operar de manera resiliente incluso sin claves de API ni modelos de IA configurados.
+La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /clear, /reset y comandos de ayuda/guía (/guide, /guia, /help), mostrar el directorio de trabajo activo (cwd) y el modelo activo en un prompt dinámico, y operar de manera resiliente incluso sin claves de API ni modelos de IA configurados, presentando una guía integral moderna estructurada en paneles Rich categorizados por funcionalidad.
 
 #### Scenario: Visualización del directorio de trabajo en consola
 - **GIVEN** la inicialización de la terminal del agente
@@ -74,6 +74,11 @@ La interfaz CLI SHALL reconocer comandos de barra oblicua como /model, /key, /cl
 - **WHEN** el usuario ejecuta el comando '/guide', '/guia' o '/help'
 - **THEN** el sistema imprime una guía visual estructurada y completa explicando cómo configurar proveedores, cómo gestionar modelos y cómo dar instrucciones al agente de forma autónoma sin realizar llamadas a la red
 
+#### Scenario: Despliegue de la guía moderna con paneles Rich
+- **GIVEN** una sesión interactiva en la terminal
+- **WHEN** el usuario escribe '/guide' o '/help'
+- **THEN** la terminal renderiza paneles visuales con bordes curvos agrupando comandos de inicio, control agéntico (/plan, /approval, /steps), diagnóstico (/tree, /diff, /doctor, /tokens) y herramientas MCP
+
 ### Requirement: Inspección y reconexión MCP
 La CLI SHALL admitir /mcp y /mcp reconnect, mostrando estado, errores y herramientas habilitadas sin requerir un modelo configurado.
 
@@ -96,7 +101,7 @@ La CLI SHALL suministrar el mismo catálogo MCP y políticas al REPL y al modo -
 - **THEN** el modelo puede usar MCP y los procesos se cierran al concluir
 
 ### Requirement: Autocompletado interactivo y renderizado visual enriquecido
-La CLI SHALL utilizar un prompt interactivo con sugerencias flotantes al escribir '/' y renderizar paneles y cajas de texto empleando bordes Unicode redondeados y resaltado sintáctico.
+La CLI SHALL utilizar un prompt interactivo con sugerencias flotantes al escribir '/', soportar autocompletado multinivel de subcomandos y rutas de archivos locales, y renderizar paneles y cajas de texto empleando bordes Unicode redondeados y resaltado sintáctico.
 
 #### Scenario: Despliegue de autocompletado de comandos
 - **GIVEN** el usuario en la línea de comandos de la CLI
@@ -112,6 +117,16 @@ La CLI SHALL utilizar un prompt interactivo con sugerencias flotantes al escribi
 - **GIVEN** un entorno de ejecución sin soporte para secuencias ANSI o sin TTY
 - **WHEN** el sistema inicializa la interfaz
 - **THEN** conmuta automáticamente a modo texto plano estándar sin caracteres de escape corruptos
+
+#### Scenario: Autocompletado de comandos y subcomandos
+- **GIVEN** el prompt de entrada interactiva de la CLI
+- **WHEN** el usuario escribe '/' o '/model ' o '/approval '
+- **THEN** se despliega un menú flotante desplegable con sugerencias de comandos principales y sus subcomandos específicos
+
+#### Scenario: Autocompletado de archivos del espacio de trabajo
+- **GIVEN** el usuario escribiendo una ruta o argumento que refiere a un archivo local
+- **WHEN** presiona la tecla de autocompletado (Tab)
+- **THEN** la CLI sugiere nombres de archivos y carpetas existentes dentro del cwd
 
 ### Requirement: Comandos de observabilidad y diagnóstico
 La CLI SHALL proveer comandos '/doctor', '/tokens', '/diff', '/tree' y '/export' para auditar la salud del entorno, el consumo de contexto, las diferencias en archivos y la persistencia de la sesión.

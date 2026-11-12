@@ -42,8 +42,15 @@ from harness.model_config import (
 )
 
 DEFAULT_BASE_PROMPT: str = (
-    "Eres Harness Jarvis, un asistente de programación y operaciones en terminal "
-    "tipo Claude Code. Responde de forma precisa, concisa y profesional."
+    "Eres Harness Jarvis, un agente autónomo de ingeniería de software y operaciones en terminal tipo Claude Code.\n\n"
+    "DIRECTIVA FUNDAMENTAL DE ACCIÓN DIRECTA (BIAS FOR ACTION):\n"
+    "1. Eres un agente ejecutor: cuando el usuario te pida crear, editar, corregir, mejorar o inspeccionar código o archivos, "
+    "DEBES invocar inmediatamente las herramientas necesarias (read_file, write_file, edit_file, run_command) en ese mismo paso.\n"
+    "2. NUNCA respondas con frases conversacionales vacías como 'Entendido, voy a modificar el archivo...', 'Ahora sí lo hago...', "
+    "o 'Procedo a editar...' sin adjuntar la llamada a la herramienta en el mismo turno. Hablar sin usar herramientas cuando "
+    "se te solicitó una acción en el sistema es un fallo crítico de comportamiento.\n"
+    "3. No pidas confirmación previa por texto si dispones de herramientas; el arnés de seguridad se encargará automáticamente "
+    "de solicitar autorización interactiva al usuario cuando sea necesario."
 )
 
 
@@ -61,53 +68,22 @@ def get_prompt_symbol() -> str:
 
 def print_user_guide() -> None:
     """Imprime una guía visual completa para nuevos usuarios (operativa sin conexión ni IA)."""
-    guide = """
-+------------------------------------------------------------------------+
-|             GUIA RAPIDA DE INICIO - HARNESS JARVIS CLI                 |
-+------------------------------------------------------------------------+
-  ¡Bienvenido! Jarvis es tu agente CLI de programacion autonomo.
-  Opera en el directorio donde abras la terminal y puede crear archivos,
-  editar codigo y ejecutar comandos bajo tu supervision.
-
-1. CONFIGURAR PROVEEDOR Y CLAVE DE API (Primer uso):
-   - Con API Key (Groq gratuito, Gemini, OpenAI, OpenRouter):
-     /key groq <tu_api_key_gsk>
-     /key gemini <tu_api_key_ai>
-     (Tu clave se inyecta en memoria y se guarda en tu .env local).
-
-   - O 100% Local y Gratuito sin Internet (con Ollama):
-     Descarga Ollama (https://ollama.com) y ejecuta: ollama pull qwen2.5-coder:7b
-     Luego en Jarvis:
-     /model add ollama qwen2.5-coder:7b
-
-2. ADMINISTRAR TUS MODELOS:
-   - Ver tu catalogo numerado:   /model
-   - Agregar un modelo propio:   /model add <proveedor> <modelo>
-                                 (ej. /model add groq qwen/qwen3.8-27b)
-   - Cambiar de modelo activo:   /model <numero> (ej. /model 1)
-   - Eliminar un modelo:         /model rm <numero> (ej. /model 2)
-
-3. COMO PEDIRLE TAREAS AL AGENTE:
-   - Solo escribe lo que necesitas en lenguaje natural:
-     * "Crea un script python test.py que calcule factoriales"
-     * "Explica el contenido de main.py"
-     * "Busca en el proyecto donde se define la funcion X"
-
-4. SEGURIDAD Y CONFIRMACION [s/n]:
-   - Para proteger tu entorno, antes de crear/editar archivos o correr
-     comandos, Jarvis se detendra y te pedira autorizacion interactiva:
-     ¿Desea autorizar esta operacion? [s/n]: s
-   - Escribe 's', 'si', 'sí', 'ss' o 'yes' para autorizar, o 'n' para cancelar.
-
-5. COMANDOS UTILES DE SESION:
-   - /guide o /help  : Vuelve a mostrar esta guia en cualquier momento.
-   - /clear          : Limpia la pantalla de la terminal.
-   - /reset          : Reinicia la memoria de chat de la carpeta de trabajo.
-   - /cwd            : Muestra la carpeta de trabajo actual.
-   - exit o quit     : Cierra la sesion de Jarvis de forma ordenada.
-+------------------------------------------------------------------------+
+    try:
+        from harness.ui import print_rich_user_guide
+        print_rich_user_guide()
+    except Exception:
+        guide = """
+GUIA RAPIDA DE INICIO - HARNESS JARVIS CLI
+  • /key <prov> <key>       : Configurar clave de API
+  • /endpoint <prov> <url>  : Personalizar URL base (Ollama/LM Studio/Meta)
+  • /model                  : Ver y administrar catálogo de modelos
+  • /plan                   : Alternar entre modo Arquitecto y Actuador
+  • /approval [auto|confirm]: Política de confirmación humana
+  • /doctor                 : Diagnóstico de endpoint y servidores MCP
+  • /tree                   : Ver árbol de archivos del espacio de trabajo
+  • /mcp                    : Inspeccionar herramientas MCP conectadas
 """
-    print(guide.strip())
+        print(guide.strip())
 
 
 def print_banner(
@@ -239,9 +215,15 @@ def handle_slash_command(
         if conversation_history is not None:
             conversation_history.clear()
         clear_session_history(cwd)
-        print("\n+--------------------------------------------------------+")
-        print("| [+] Memoria de conversación reiniciada para la carpeta |")
-        print("+--------------------------------------------------------+")
+        try:
+            from harness.ui import print_rich_status_card
+            print_rich_status_card(
+                "Memoria de conversación reiniciada",
+                [("Directorio", str(cwd)), ("Estado", "Historial local reiniciado exitosamente")],
+                border_style="cyan",
+            )
+        except Exception:
+            print("\n[+] Memoria de conversación reiniciada para la carpeta")
         return current_provider, current_model, True
 
     if cmd in ("/compact", "/compactar"):
@@ -266,12 +248,19 @@ def handle_slash_command(
         new_char_count = sum(len(str(m.get("content", ""))) for m in conversation_history)
         reduction = max(0, int((1 - (new_char_count / max(old_char_count, 1))) * 100))
 
-        print("\n+--------------------------------------------------------+")
-        print("| [+] Historial compactado exitosamente!                 |")
-        print(f"|     Caracteres previos : {old_char_count}".ljust(57) + "|")
-        print(f"|     Caracteres actuales: {new_char_count}".ljust(57) + "|")
-        print(f"|     Reducción estimada : ~{reduction}% de tokens".ljust(57) + "|")
-        print("+--------------------------------------------------------+")
+        try:
+            from harness.ui import print_rich_status_card
+            print_rich_status_card(
+                "Historial compactado exitosamente",
+                [
+                    ("Caracteres previos", str(old_char_count)),
+                    ("Caracteres actuales", str(new_char_count)),
+                    ("Reducción estimada", f"~{reduction}% de tokens"),
+                ],
+                border_style="green",
+            )
+        except Exception:
+            print(f"\n[+] Historial compactado exitosamente: {old_char_count} -> {new_char_count}")
         print(f"\n[Resumen conservado en contexto]:\n{summary}")
         return current_provider, current_model, True
 
@@ -280,20 +269,14 @@ def handle_slash_command(
         if not sessions:
             print("\n[Sesiones]: No hay sesiones anteriores registradas en este espacio de trabajo.")
         else:
-            print("\n+----------------------------------------------------------------------------------+")
-            print("| HISTORIAL DE SESIONES GUARDADAS EN ESTE ESPACIO                                  |")
-            print("+----------------------------------------------------------------------------------+")
-            print("| ID de Sesion                  | Fecha y Hora        | Modelo             | Msgs  |")
-            print("+-------------------------------+---------------------+--------------------+-------+")
-            for s in sessions:
-                sid = (s["session_id"][:29]).ljust(29)
-                dt = (s.get("created_at") or "")[:19].ljust(19)
-                m_info = f"{s.get('provider') or '?'}:{s.get('model') or '?'}"[:18].ljust(18)
-                cnt = str(s.get("message_count", 0)).rjust(5)
-                print(f"| {sid} | {dt} | {m_info} | {cnt} |")
-            print("+----------------------------------------------------------------------------------+")
-            print("| Usa: /resume <id_de_sesion> para continuar cualquiera de estas sesiones.          |")
-            print("+----------------------------------------------------------------------------------+")
+            try:
+                from harness.ui import create_sessions_table, get_console
+                table = create_sessions_table(sessions)
+                get_console().print(table)
+                get_console().print("[dim]Usa: [yellow]/resume <id_de_sesion>[/yellow] para continuar cualquiera de estas sesiones.[/dim]\n")
+            except Exception:
+                for s in sessions:
+                    print(f"- {s.get('session_id')}: {s.get('created_at')} ({s.get('provider')}:{s.get('model')})")
         return current_provider, current_model, True
 
     if cmd in ("/resume", "/reanudar"):
@@ -324,12 +307,17 @@ def handle_slash_command(
             current_provider = restored_prov
             current_model = restored_mod
 
-        print("\n+--------------------------------------------------------+")
-        print(f"| [+] Sesión '{target_id}' reanudada con éxito!           |")
-        print(f"|     Mensajes cargados : {len(restored_msgs)}".ljust(57) + "|")
-        if current_provider and current_model:
-            print(f"|     Modelo restaurado : {current_provider.upper()} ({current_model})".ljust(57) + "|")
-        print("+--------------------------------------------------------+")
+        try:
+            from harness.ui import print_rich_status_card
+            card_lines = [
+                ("Sesión", target_id),
+                ("Mensajes cargados", str(len(restored_msgs))),
+            ]
+            if current_provider and current_model:
+                card_lines.append(("Modelo restaurado", f"{current_provider.upper()} ({current_model})"))
+            print_rich_status_card(f"Sesión '{target_id}' reanudada con éxito", card_lines, border_style="green")
+        except Exception:
+            print(f"\n[+] Sesión '{target_id}' reanudada con éxito ({len(restored_msgs)} msgs)")
         return current_provider, current_model, True
 
     if cmd == "/model":
@@ -338,31 +326,32 @@ def handle_slash_command(
         # Subcomando: /model o /model list -> mostrar catálogo numerado
         if len(parts) == 1 or (len(parts) == 2 and parts[1].lower() == "list"):
             catalog = get_available_models_catalog(config_path)
-            prov_disp = current_provider.upper() if current_provider else "[SIN CONFIGURAR]"
-            mod_disp = current_model if current_model else "[SIN CONFIGURAR]"
-
-            print("\n+--------------------------------------------------------+")
-            print(f"| Modelo activo: {prov_disp} -> {mod_disp}".ljust(57) + "|")
-            print("+--------------------------------------------------------+")
-
-            if not catalog:
-                print("| (Catálogo vacío: no tienes modelos registrados)       |")
-                print("| Para agregar uno usa: /model add <proveedor> <modelo>  |")
-                print("+--------------------------------------------------------+")
-            else:
-                print("| Modelos registrados:                                   |")
+            try:
+                from harness.ui import create_models_table, get_console, print_rich_status_card
+                if not catalog:
+                    print_rich_status_card(
+                        "Catálogo vacío",
+                        [
+                            ("Estado", "No tienes modelos registrados"),
+                            ("Para agregar uno usa", "/model add <proveedor> <modelo> [url]"),
+                        ],
+                        border_style="yellow",
+                    )
+                else:
+                    table = create_models_table(
+                        catalog,
+                        active_provider=current_provider,
+                        active_model=current_model,
+                    )
+                    get_console().print(table)
+                    get_console().print(
+                        "[dim]Uso: [yellow]/model <numero>[/yellow] | "
+                        "[yellow]/model add <prov> <modelo> [url][/yellow] | "
+                        "[yellow]/model rm <numero>[/yellow][/dim]\n"
+                    )
+            except Exception:
                 for item in catalog:
-                    has_k = has_valid_key_for_provider(item["provider"])
-                    k_str = "[OK Clave]" if has_k else "[Sin clave]"
-                    if item["provider"] == "ollama":
-                        k_str = "[OK Local]"
-                    act_str = " *Activo" if item["active"] else ""
-                    line_str = f"  [{item['index']}] {item['provider'].upper()}: {item['model']} {k_str}{act_str}"
-                    print(f"| {line_str}".ljust(57) + "|")
-                print("+--------------------------------------------------------+")
-                print("| Uso: /model <numero> | /model add <prov> <modelo>      |")
-                print("|      /model rm <numero>                                |")
-                print("+--------------------------------------------------------+")
+                    print(f"[{item.get('index')}] {item.get('provider')}: {item.get('model')}")
             return current_provider, current_model, True
 
         # Subcomando: /model add <prov> <modelo> [url]
@@ -379,12 +368,14 @@ def handle_slash_command(
                 print(f"\n[Error]: Proveedor '{prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
                 return current_provider, current_model, True
             add_user_model(prov, mod, config_path, set_active=True, endpoint_url=endpoint_url)
-            print("\n+--------------------------------------------------------+")
-            print(f"| [+] Modelo agregado y activado:                        |")
-            print(f"|     {prov.upper()} -> {mod}".ljust(57) + "|")
-            if endpoint_url:
-                print(f"|     Endpoint: {endpoint_url}".ljust(57) + "|")
-            print("+--------------------------------------------------------+")
+            try:
+                from harness.ui import print_rich_status_card
+                lines = [("Modelo", f"{prov.upper()} -> {mod}")]
+                if endpoint_url:
+                    lines.append(("Endpoint", endpoint_url))
+                print_rich_status_card("Modelo agregado y activado", lines, border_style="green")
+            except Exception:
+                print(f"\n[+] Modelo agregado y activado: {prov.upper()} -> {mod}")
             return prov, mod, True
 
         # Subcomando: /model rm <target>
@@ -415,11 +406,18 @@ def handle_slash_command(
             auth_str = "Autenticado y listo" if has_k else "Requiere clave con /key"
             if new_prov == "ollama":
                 auth_str = "Local (Ollama)"
-            print("\n+--------------------------------------------------------+")
-            print(f"| [+] Modelo activo cambiado a:                          |")
-            print(f"|     {new_prov.upper()} -> {new_model}".ljust(57) + "|")
-            print(f"|     Estado: {auth_str}".ljust(57) + "|")
-            print("+--------------------------------------------------------+")
+            try:
+                from harness.ui import print_rich_status_card
+                print_rich_status_card(
+                    "Modelo activo cambiado a",
+                    [
+                        ("Modelo", f"{new_prov.upper()} -> {new_model}"),
+                        ("Estado", auth_str),
+                    ],
+                    border_style="green",
+                )
+            except Exception:
+                print(f"\n[+] Modelo activo cambiado a: {new_prov.upper()} -> {new_model}")
             return new_prov, new_model, True
 
         # Subcomando clásico: /model <prov> <modelo>
@@ -452,19 +450,18 @@ def handle_slash_command(
 
         # 1. /endpoint sin argumentos -> listar endpoints
         if len(parts) == 1:
-            print("\n+------------------------------------------------------------------------+")
-            print("| DIRECCIONES Y ENDPOINTS DE PROVEEDORES                                 |")
-            print("+------------------------------------------------------------------------+")
-            for p, info in SUPPORTED_PROVIDERS.items():
-                active_url = os.getenv(f"{p.upper()}_BASE_URL") or endpoints.get(p) or info["base_url"]
-                is_custom = bool(endpoints.get(p) or os.getenv(f"{p.upper()}_BASE_URL"))
-                tag = "[Personalizado]" if is_custom else "[Por defecto]"
-                line = f"  {p.upper()}: {active_url} {tag}"
-                print(f"| {line}".ljust(73) + "|")
-            print("+------------------------------------------------------------------------+")
-            print("| Uso: /endpoint <proveedor> <url>                                       |")
-            print("|      Ejemplo: /endpoint ollama http://localhost:1234/v1                |")
-            print("+------------------------------------------------------------------------+")
+            try:
+                from harness.ui import create_endpoints_table, get_console
+                table = create_endpoints_table(SUPPORTED_PROVIDERS, endpoints)
+                get_console().print(table)
+                get_console().print(
+                    "[dim]Uso: [yellow]/endpoint <proveedor> <url>[/yellow] "
+                    "(ej: /endpoint ollama http://localhost:1234/v1)[/dim]\n"
+                )
+            except Exception:
+                print("\nDIRECCIONES Y ENDPOINTS DE PROVEEDORES")
+                for p, info in SUPPORTED_PROVIDERS.items():
+                    print(f"  {p.upper()}: {endpoints.get(p) or info['base_url']} [Por defecto]")
             return current_provider, current_model, True
 
         # 2. /endpoint <proveedor> <url>
@@ -475,10 +472,15 @@ def handle_slash_command(
                 print(f"\n[Error]: Proveedor '{prov}' no soportado. Opciones: {', '.join(SUPPORTED_PROVIDERS.keys())}")
                 return current_provider, current_model, True
             set_provider_endpoint(prov, url, config_path)
-            print("\n+--------------------------------------------------------+")
-            print(f"| [+] Endpoint actualizado para {prov.upper()}:".ljust(57) + "|")
-            print(f"|     {url}".ljust(57) + "|")
-            print("+--------------------------------------------------------+")
+            try:
+                from harness.ui import print_rich_status_card
+                print_rich_status_card(
+                    f"Endpoint actualizado para {prov.upper()}",
+                    [("Proveedor", prov.upper()), ("Endpoint", url)],
+                    border_style="green",
+                )
+            except Exception:
+                print(f"\n[+] Endpoint actualizado para {prov.upper()}: {url}")
             return current_provider, current_model, True
 
         # 3. /endpoint <proveedor> (solicita interactivamente la dirección)
@@ -509,9 +511,18 @@ def handle_slash_command(
                 return current_provider, current_model, True
             save_api_key_to_env(target_prov, key_val, env_path=cwd / ".env")
             load_dotenv(cwd / ".env", override=True)
-            print("\n+--------------------------------------------------------+")
-            print(f"| [+] Clave para {target_prov.upper()} activada en memoria y guardada. |")
-            print("+--------------------------------------------------------+")
+            try:
+                from harness.ui import print_rich_status_card
+                print_rich_status_card(
+                    f"Clave para {target_prov.upper()} activada en memoria y guardada.",
+                    [
+                        ("Proveedor", target_prov.upper()),
+                        ("Estado", "Activada en memoria y guardada en .env"),
+                    ],
+                    border_style="green",
+                )
+            except Exception:
+                print(f"\n[+] Clave para {target_prov.upper()} activada en memoria y guardada.")
 
             if not current_provider:
                 config_path = cwd / ".harness_models.json"

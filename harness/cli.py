@@ -41,27 +41,107 @@ SLASH_COMMANDS_REGISTRY: dict[str, str] = {
     "quit": "Terminar y salir de la sesión interactiva",
 }
 
+SLASH_SUBCOMMANDS_REGISTRY: dict[str, dict[str, str]] = {
+    "/model": {
+        "add": "Agregar nuevo modelo: /model add <prov> <modelo> [url]",
+        "list": "Listar catálogo numerado de modelos registrados",
+        "rm": "Eliminar modelo: /model rm <numero_o_nombre>",
+    },
+    "/approval": {
+        "auto": "Aprobación automática de acciones seguras sin confirmación",
+        "confirm": "Confirmación interactiva obligatoria [s/n/a]",
+    },
+    "/mcp": {
+        "reconnect": "Reiniciar y reconectar todos los servidores MCP",
+    },
+    "/endpoint": {
+        "openai": "Configurar URL base para OpenAI / Meta",
+        "ollama": "Configurar URL base para Ollama local",
+        "groq": "Configurar URL base para Groq",
+        "gemini": "Configurar URL base para Gemini",
+        "openrouter": "Configurar URL base para OpenRouter",
+    },
+    "/key": {
+        "openai": "Configurar clave de API para OpenAI / Meta",
+        "gemini": "Configurar clave de API para Gemini",
+        "groq": "Configurar clave de API para Groq",
+        "openrouter": "Configurar clave de API para OpenRouter",
+    },
+}
+
 
 class JarvisCommandCompleter(Completer):
-    """Autocompletador para comandos de barra oblicua con metadatos descriptivos."""
+    """Autocompletador para comandos de barra oblicua, subcomandos y archivos locales."""
 
-    def __init__(self, commands: Optional[dict[str, str]] = None):
+    def __init__(
+        self,
+        commands: Optional[dict[str, str]] = None,
+        subcommands: Optional[dict[str, dict[str, str]]] = None,
+        base_dir: Optional[Path] = None,
+    ):
         self.commands = commands or SLASH_COMMANDS_REGISTRY
+        self.subcommands = subcommands or SLASH_SUBCOMMANDS_REGISTRY
+        self.base_dir = base_dir
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         stripped = text.lstrip()
 
-        # Solo sugerir si está al inicio de la línea o tipea '/'
+        # 1. Comandos primarios (/plan, /model, /doctor...)
         if " " not in stripped:
-            for cmd, desc in self.commands.items():
-                if cmd.lower().startswith(stripped.lower()):
-                    yield Completion(
-                        cmd,
-                        start_position=-len(stripped),
-                        display=cmd,
-                        display_meta=desc,
-                    )
+            if stripped.startswith("/"):
+                for cmd, desc in self.commands.items():
+                    if cmd.lower().startswith(stripped.lower()):
+                        yield Completion(
+                            cmd,
+                            start_position=-len(stripped),
+                            display=cmd,
+                            display_meta=desc,
+                        )
+            return
+
+        # 2. Subcomandos jerárquicos (/model add, /approval auto...)
+        parts = stripped.split()
+        if stripped.startswith("/") and len(parts) >= 1:
+            cmd = parts[0].lower()
+            if cmd in self.subcommands:
+                sub_dict = self.subcommands[cmd]
+                sub_prefix = parts[1].lower() if len(parts) > 1 and not text.endswith(" ") else ""
+                if len(parts) == 1 and text.endswith(" "):
+                    for sub, desc in sub_dict.items():
+                        yield Completion(sub, start_position=0, display=sub, display_meta=desc)
+                    return
+                elif len(parts) == 2 and not text.endswith(" "):
+                    for sub, desc in sub_dict.items():
+                        if sub.lower().startswith(sub_prefix):
+                            yield Completion(
+                                sub,
+                                start_position=-len(sub_prefix),
+                                display=sub,
+                                display_meta=desc,
+                            )
+                    return
+
+        # 3. Autocompletado de archivos o carpetas si la última palabra tiene formato de ruta/extensión
+        last_word = text.split()[-1] if text.split() else ""
+        if last_word and ("." in last_word or "/" in last_word or "\\" in last_word or len(last_word) >= 4):
+            cwd = self.base_dir or Path.cwd()
+            ignore_names = {".git", "__pycache__", ".venv", ".pytest_cache", ".harness_sessions"}
+            try:
+                for entry in cwd.iterdir():
+                    if entry.name in ignore_names:
+                        continue
+                    if entry.name.lower().startswith(last_word.lower()):
+                        meta = "Carpeta local" if entry.is_dir() else "Archivo local"
+                        disp = f"{entry.name}/" if entry.is_dir() else entry.name
+                        yield Completion(
+                            entry.name,
+                            start_position=-len(last_word),
+                            display=disp,
+                            display_meta=meta,
+                        )
+            except Exception:
+                pass
 
 
 def create_prompt_session(output: Any = None) -> PromptSession:

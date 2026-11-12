@@ -45,3 +45,34 @@ def test_create_prompt_session_instantiation():
     session = create_prompt_session()
     assert session is not None
     assert session.completer is not None
+
+
+def test_completer_subcommands_for_model():
+    completer = JarvisCommandCompleter()
+    doc = Document("/model ", cursor_position=7)
+    completions = list(completer.get_completions(doc, None))
+    matches = [c.text for c in completions]
+    assert "add" in matches
+    assert "list" in matches
+    assert "rm" in matches
+
+
+def test_completer_subcommands_filter():
+    completer = JarvisCommandCompleter()
+    doc = Document("/approval a", cursor_position=11)
+    completions = list(completer.get_completions(doc, None))
+    matches = [c.text for c in completions]
+    assert "auto" in matches
+    assert "confirm" not in matches
+
+
+def test_completer_local_files(tmp_path):
+    (tmp_path / "empanada.html").write_text("test", encoding="utf-8")
+    (tmp_path / "main.py").write_text("test", encoding="utf-8")
+
+    completer = JarvisCommandCompleter(base_dir=tmp_path)
+    text = "revisa el archivo empanada."
+    doc = Document(text, cursor_position=len(text))
+    completions = list(completer.get_completions(doc, None))
+    matches = [c.text for c in completions]
+    assert "empanada.html" in matches

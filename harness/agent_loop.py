@@ -199,6 +199,22 @@ def run_agent_loop(
         active_executor = tool_executor
 
     step = 0
+    nudge_count = 0
+
+    PROMISE_PATTERNS = (
+        "ahora sí lo",
+        "ahora si lo",
+        "voy a modificar",
+        "voy a editar",
+        "voy a crear",
+        "procedo a",
+        "mejoro ese mismo archivo",
+        "modifico ese mismo archivo",
+        "enseguida lo",
+        "ahora procedo",
+        "paso a modificar",
+        "procederé a",
+    )
 
     try:
         while step < effective_max_steps:
@@ -292,6 +308,30 @@ def run_agent_loop(
             else:
                 # Respuesta final de texto sin tool calls
                 final_content = response.content or ""
+
+                # Salvaguarda Bias for Action:
+                # Si el modelo emite una promesa conversacional evasiva sin invocar herramientas
+                # y aún no se agotaron los pasos, inyectar un recordatorio para forzar la ejecución real.
+                lower_content = final_content.lower()
+                if (
+                    not is_plan
+                    and nudge_count < 1
+                    and step < effective_max_steps
+                    and len(final_content) < 300
+                    and any(pattern in lower_content for pattern in PROMISE_PATTERNS)
+                ):
+                    nudge_count += 1
+                    history.append({"role": "assistant", "content": final_content})
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            "[DIRECTIVA DEL ARNÉS - BIAS FOR ACTION]: No anuncies ni prometas lo que vas a hacer. "
+                            "Emite de inmediato la llamada a la herramienta ('write_file', 'edit_file', 'run_command') "
+                            "para aplicar los cambios directamente en el sistema ahora mismo."
+                        ),
+                    })
+                    continue
+
                 if include_timing:
                     elapsed = time.perf_counter() - start_time
                     time_badge = f"[⏱️ {elapsed:.2f}s]"

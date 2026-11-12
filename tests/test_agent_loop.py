@@ -366,6 +366,42 @@ class TestKernelIntelligenceAndMemory(unittest.TestCase):
         self.assertIn("ALERTA DE SEGURIDAD Y ESTADO REAL", tool_entry["content"])
         self.assertIn("Los cambios NO fueron aplicados", tool_entry["content"])
 
+    def test_bias_for_action_nudges_procrastinating_model(self):
+        call_step = 0
+
+        def procrastinating_caller(messages: list[dict[str, Any]], **kwargs) -> NormalizedResponse:
+            nonlocal call_step
+            call_step += 1
+            if call_step == 1:
+                # El modelo responde con una promesa conversacional en vez de actuar
+                return NormalizedResponse(
+                    content="Entendido — mejoro ese mismo archivo directamente con SVG sin emojis.",
+                    tool_calls=[],
+                )
+            elif call_step == 2:
+                # El modelo recibió el nudge y emite la tool call
+                last_user_msg = messages[-1]
+                assert "BIAS FOR ACTION" in last_user_msg["content"]
+                tc = NormalizedToolCall(
+                    id="call_write_1",
+                    name="write_file",
+                    arguments={"path": "empanada.html", "content": "<svg></svg>"},
+                )
+                return NormalizedResponse(content="Escribiendo cambios", tool_calls=[tc])
+            return NormalizedResponse(content="Archivo modificado con éxito.", tool_calls=[])
+
+        reply, history = run_agent_loop(
+            prompt="Mejora empanada.html",
+            llm_caller=procrastinating_caller,
+            tool_executor=lambda name, args: "Archivo 'empanada.html' escrito exitosamente.",
+            system_prompt="Eres Jarvis",
+        )
+
+        self.assertEqual(call_step, 3)
+        self.assertIn("Archivo modificado con éxito", reply)
+        nudge = next((m for m in history if "BIAS FOR ACTION" in m.get("content", "")), None)
+        self.assertIsNotNone(nudge)
+
 
 if __name__ == "__main__":
     unittest.main()
